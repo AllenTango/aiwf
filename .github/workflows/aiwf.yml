@@ -1,0 +1,16 @@
+# TODO(M4): dogfooding pipeline.
+# Trigger on issue opened/labeled + issue_comment ("@aiwf revise: ...").
+# Provide secrets: AIWF_TOKEN (GH PAT), provider key for opencode engine.
+name: aiwf
+on:
+  issues:
+    types: [opened]
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  run-team:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "placeholder — M4 will replace this workflow"

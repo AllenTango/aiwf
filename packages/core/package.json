@@ -1,0 +1,23 @@
+{
+  "name": "@aiwf/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Workflow engine core: ingest → plan (captain) → parallel member dispatch → synthesize → deliver.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "~5.8.3",
+    "vitest": "^3.1.4"
+  }
+}

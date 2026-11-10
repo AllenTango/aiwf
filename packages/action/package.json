@@ -1,0 +1,22 @@
+{
+  "name": "@aiwf/action",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitHub Action shell: reads issue → runs the AI dev workflow team → opens the PR.",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --alias:@aiwf/core=../core/src/index.ts --outfile=dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aiwf/core": "workspace:*",
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "~5.8.3",
+    "vitest": "^3.1.4"
+  }
+}

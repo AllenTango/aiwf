@@ -1,0 +1,19 @@
+# TODO(M4): finalize action.yml — inputs, outputs, branding, node20 runtime entry.
+# Entry point must be the bundled `packages/action/dist/index.js` (CJS).
+# For GitHub Marketplace packaging the action must live at repo root.
+name: 'AI Dev Workflow'
+description: 'Runs an AI-native dev team: captain plans, parallel members implement, captain synthesizes a PR.'
+author: 'aiwf'
+branding:
+  icon: 'users'
+  color: 'blue'
+outputs:
+  pr-url:
+    description: 'URL of the PR opened by the workflow team.'
+  branch:
+    description: 'Branch holding the synthesized result.'
+  summary:
+    description: 'Captain closing summary.'
+runs:
+  using: 'node20'
+  main: 'packages/action/dist/index.js'

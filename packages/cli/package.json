@@ -1,0 +1,31 @@
+{
+  "name": "@aiwf/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local CLI for running the AI dev workflow team against any git repo.",
+  "bin": {
+    "aiwf": "dist/main.js"
+  },
+  "main": "dist/main.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "dev": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aiwf/core": "workspace:*",
+    "commander": "^14.0.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.3",
+    "typescript": "~5.8.3",
+    "vitest": "^3.1.4"
+  }
+}
