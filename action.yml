@@ -1,19 +1,56 @@
-# TODO(M4): finalize action.yml — inputs, outputs, branding, node20 runtime entry.
-# Entry point must be the bundled `packages/action/dist/index.js` (CJS).
-# For GitHub Marketplace packaging the action must live at repo root.
+# AI Dev Workflow — Issue 输入 · 队长规划 · 并行队员 · 队长合成 · 结项 PR。
+# OWNER: M4.
+#
+# 入口为 esbuild 产物 packages/action/dist/index.js(CJS bundle)。
+# 发布 Marketplace / 从 `@main` 引用时,该 dist 必须随仓库提交:
+# 根 .gitignore 当前全局忽略 dist/,需要反排除(见 docs/action.md 打包段落)。
 name: 'AI Dev Workflow'
 description: 'Runs an AI-native dev team: captain plans, parallel members implement, captain synthesizes a PR.'
 author: 'aiwf'
+
 branding:
   icon: 'users'
   color: 'blue'
+
+inputs:
+  task_ref:
+    description: >-
+      Issue reference for the task, in "owner/repo#123" form.
+      For in-repo dogfooding, pass "github.repository#issue-number".
+    required: true
+  engine:
+    description: 'AI engine backend: "opencode" (runs the opencode CLI, recommended) or "mock" (deterministic, for tests).'
+    required: false
+    default: 'opencode'
+  model:
+    description: 'Model id handed to the engine, e.g. "opencode/glm-5.3-free". Empty → falls back to env AIWF_MODEL.'
+    required: false
+    default: ''
+  base_branch:
+    description: 'Base branch for the pull request. Empty → the current branch of the checkout.'
+    required: false
+    default: ''
+  branch_prefix:
+    description: 'Prefix for the generated work branches.'
+    required: false
+    default: 'aiwf/'
+  max_parallel:
+    description: 'Maximum number of members running in parallel (positive integer).'
+    required: false
+    default: '4'
+  dry_run:
+    description: 'Plan only: skip member execution and PR delivery (true/false).'
+    required: false
+    default: 'false'
+
 outputs:
   pr-url:
-    description: 'URL of the PR opened by the workflow team.'
+    description: 'URL of the pull request opened by the team (unset on dry_run or when no PR could be delivered).'
   branch:
     description: 'Branch holding the synthesized result.'
   summary:
     description: 'Captain closing summary.'
+
 runs:
   using: 'node20'
   main: 'packages/action/dist/index.js'

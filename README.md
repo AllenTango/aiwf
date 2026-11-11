@@ -37,3 +37,51 @@ pnpm build && pnpm test
 - ESM + NodeNext:相对导入以 `.js` 结尾
 - TypeScript strict;`vitest`;不抛异常表达成员级失败(TaskResult.status)
 - 队员不得修改 `contracts/`、根配置与他人的责任区
+
+## Action 用法
+
+把 Issue 变成 PR:在任意仓库 `.github/workflows/aiwf.yml` 挂上本 action,新建/编辑
+Issue 或评论中带 `@aiwf` 即自动开工 —— 队长规划(`plan.summary`)、并行队员在独立
+worktree 分支实现、队长合成并创建/更新结项 PR(正文含诉求→方案→执行明细→变更
+文件→风险→结论六段)。最小接入:
+
+```yaml
+name: aiwf
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  run-team:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (contains(github.event.comment.body, '@aiwf') && github.event.comment.user.type != 'Bot')
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.2 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'pnpm' }
+      - run: pnpm install --frozen-lockfile
+      - run: npm install -g opencode-ai
+      - run: pnpm build
+      - uses: ./
+        with:
+          task_ref: ${{ github.repository }}#${{ github.event.issue.number }}
+        env:
+          AIWF_MODEL: ${{ vars.AIWF_MODEL }}   # 可选:仓库 Variable,如 opencode/glm-5.3-free
+          GITHUB_TOKEN: ${{ github.token }}
+```
+
+常用 inputs:`task_ref`(必填,`owner/repo#123`)、`engine`(opencode/mock)、
+`model`、`base_branch`、`branch_prefix`(默认 `aiwf/`)、`max_parallel`(默认 4)、
+`dry_run`(只出规划不写码);outputs:`pr-url` / `branch` / `summary`;PR 已存在时
+自动复用更新。完整说明(权限、Secrets/Variables、示例 Issue 文案、定制与故障排查)
+见 [docs/action.md](docs/action.md)。

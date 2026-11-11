@@ -1,16 +1,74 @@
-# TODO(M4): dogfooding pipeline.
-# Trigger on issue opened/labeled + issue_comment ("@aiwf revise: ...").
-# Provide secrets: AIWF_TOKEN (GH PAT), provider key for opencode engine.
+# Dogfooding:本仓库自己运行自己的 AI 研发团队(队长规划 → 并行队员 → 队长合成 → PR)。
+# OWNER: M4.
+#
+# 触发:
+#   - issues(opened / edited):新建或编辑 Issue 即自动开工;
+#   - issue_comment(created):评论文本中包含 "@aiwf" 时开工,如 "@aiwf revise: 补充错误处理示例"。
+#
+# 权限说明:contents 写(建分支/推送)、issues 写(读 Issue/写评论)、pull-requests 写(建/改 PR)。
+# 模型配置:仓库 Variables → Actions,键为 AIWF_MODEL(如 "opencode/glm-5.3-free"),可选;
+# 若仓库 Variable 未配置,engine 会使用其默认模型。
 name: aiwf
+
 on:
   issues:
-    types: [opened]
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
 permissions:
   contents: write
   issues: write
   pull-requests: write
+
+concurrency:
+  group: aiwf-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   run-team:
     runs-on: ubuntu-latest
+    # 只有 issue_comment 且评论包含 "@aiwf" 才执行;机器人评论(含自己开的 bot)忽略,防止循环触发。
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (contains(github.event.comment.body, '@aiwf') && github.event.comment.user.type != 'Bot')
     steps:
-      - run: echo "placeholder — M4 will replace this workflow"
+      - name: Check out repo (full history for worktrees/branches)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the opencode CLI (engine backend)
+        run: npm install -g opencode-ai
+
+      - name: Build bundles (packages/action/dist/index.js)
+        run: pnpm build
+
+      - name: Run the AI dev workflow team
+        # 本地 action:仓库根 action.yml(`./`)。发布到 Marketplace 后可改为
+        # `uses: <owner>/ai-dev-workflow-action@main`。
+        uses: ./
+        with:
+          # issue 与 issue_comment 两类事件都可取到 issue number。
+          task_ref: ${{ github.repository }}#${{ github.event.issue.number }}
+          # engine/model/base_branch/branch_prefix/max_parallel/dry_run 均可按仓库定制,
+          # 见 docs/action.md "定制" 一节。
+        env:
+          # 模型来自仓库 Variable(未配置时留空,engine 使用默认模型)。
+          AIWF_MODEL: ${{ vars.AIWF_MODEL }}
+          # token 必须显式注入(不会隐式透传给 action)。
+          GITHUB_TOKEN: ${{ github.token }}
