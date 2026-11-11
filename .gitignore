@@ -9,3 +9,7 @@ coverage/
 .DS_Store
 Thumbs.db
 aiwf-work/
+
+# Action 产物需入库(Marketplace 消费方不执行 build)
+!packages/action/dist/
+!packages/action/dist/**

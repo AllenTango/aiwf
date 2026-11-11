@@ -247,6 +247,8 @@ export interface WorkflowConfig {
   logger?: Logger;
   onEvent?: EventSink;
   engineConfig?: Partial<EngineConfig>;
+  /** 交付基线分支(省缺时取调度前的当前分支)。 */
+  baseBranch?: string;
   /** Branch prefix; defaults to "aiwf/". */
   branchPrefix?: string;
   /** Parallel member cap; defaults to 4. */
