@@ -94,7 +94,8 @@ PR 描述由 action 生成,固定段落:`🧾 诉求`(Issue 标题/正文摘要/
 | --- | --- | --- | --- |
 | env(step) | `GITHUB_TOKEN` | 必需 | 推荐传 `${{ github.token }}`(工作流 token,配合上面的 permissions 即可)。需要跨仓库或有更严控策略时,改用 PAT 存入 `secrets.*`,PAT 需 `repo` 场景的 contents/issues/pull-requests 写权限。 |
 | variable | `AIWF_MODEL` | 可选 | 仓库 Settings → Secrets and variables → Actions → **Variables**,键 `AIWF_MODEL`,值如 `opencode/glm-5.3-free`。action 通过 env 透传给 engine。 |
-| secrets / env | 模型供应商凭证 | 视供应商 | opencode CLI 需要能访问模型供应商。通用做法是用 `opencode auth login` 预置凭证,或在步骤 env 注入供应商要求的变量;具体变量名以你所选供应商 / opencode 当前文档为准(常见如 `*_API_KEY`)。 |
+| secrets / env | `OPENCODE_API_KEY` | opencode 网关必需 | 使用 opencode 系模型(如 `opencode/glm-5.3-free`)时,CI 中需设置此 Secret(opencode 官方网关凭证,`OPENCODE_ZEN_API_KEY` 为其别名)。仓库 Settings → Secrets and variables → Actions → **Secrets** 新建,workflow 以 `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` 注入。 |
+| secrets / env | 模型供应商凭证 | 视供应商 | 不用 opencode 网关、直连其他供应商时,用 `opencode auth login --method key` 预置,或在步骤 env 注入该供应商要求的变量(如 `ANTHROPIC_API_KEY`);变量名以供应商 / opencode 当前文档为准。 |
 
 默认 `github.token` 已经配好 issues/pull-requests/contents(依赖 workflow 里的
 `permissions` 块),一般无需额外 Secret;真正需要预置的是**模型供应商凭证**。

@@ -70,5 +70,8 @@ jobs:
         env:
           # 模型来自仓库 Variable(未配置时留空,engine 使用默认模型)。
           AIWF_MODEL: ${{ vars.AIWF_MODEL }}
+          # 模型凭证:opencode 网关(opencode/glm-5.3-free 等)用 OPENCODE_API_KEY。
+          # 仓库 Settings → Secrets and variables → Actions → Secrets 新建 OPENCODE_API_KEY。
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # token 必须显式注入(不会隐式透传给 action)。
           GITHUB_TOKEN: ${{ github.token }}
