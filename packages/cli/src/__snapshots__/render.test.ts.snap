@@ -1,0 +1,51 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`closing report box (结项报告) > ✅ success with a real PR 1`] = `
+"┌─ 结项报告 ────────────────────────────────────────────
+│ ✅ 成功(全部成员完成)
+│ 分支 : aiwf/issue-1
+│ 交付 : PR #12
+       https://github.com/o/r/pull/12
+│ 耗时 : 2.5s
+│ 阶段 : ingest → plan
+│ 
+│ 成员结果
+│   ✔ T-completed — member completed
+│   ✔ T-completed — member completed
+│ 
+│ 未决风险
+│   - 引擎超时可能截断打包任务
+└────────────────────────────────────────────────────"
+`;
+
+exports[`local handoff body snapshot > branch push instructions + manual manifest hints 1`] = `
+"📦 本地交付完成 — 团队产物已保留在本地分支
+  • 分支:aiwf/quick-fix(基线:develop)
+  • 原因:分支推送失败(远端可达性 / 凭证 / 权限)。
+
+  上 GitHub 步骤:
+    git push -u origin aiwf/quick-fix
+    # 已安装 gh 时:gh pr create --head aiwf/quick-fix --base develop --fill
+
+  建议后续:
+    - 完整 issue→PR 闭环请使用 aiwf GitHub Action(issue 触发自动化);
+    - 或将分支 aiwf/quick-fix 推送后在 GitHub 手动发起 Pull Request。"
+`;
+
+exports[`plan tree (deps drive indentation) > renders summary, roles, outputs, deps and risks 1`] = `
+"▶ 队长计划
+  拆分为三步:实现 → 打磨 → 打包
+
+● T1 · 实现登录页
+  [role: implementer]
+  outputs: src/login.tsx
+  ● T1b · 打磨样式 (依赖 T1)
+    [role: reviewer]
+    outputs: src/login.css
+    ● T2 · 打包 README (依赖 T1, T1b)
+      [role: packager]
+      outputs: README.md
+
+⚠ 队长风险提示
+  - 引擎超时可能截断打包任务"
+`;

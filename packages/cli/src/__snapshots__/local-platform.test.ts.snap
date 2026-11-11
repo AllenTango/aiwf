@@ -1,0 +1,15 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`local delivery handoff (no remote configured) > handoff body text snapshot 1`] = `
+"📦 本地交付完成 — 团队产物已保留在本地分支
+  • 分支:aiwf/issue-1-fix-login(基线:main)
+  • 原因:仓库尚未配置远端 remote,分支无法推送。
+
+  上 GitHub 步骤:
+    git push -u origin aiwf/issue-1-fix-login
+    # 已安装 gh 时:gh pr create --head aiwf/issue-1-fix-login --base main --fill
+
+  建议后续:
+    - 完整 issue→PR 闭环请使用 aiwf GitHub Action(issue 触发自动化);
+    - 或将分支 aiwf/issue-1-fix-login 推送后在 GitHub 手动发起 Pull Request。"
+`;
