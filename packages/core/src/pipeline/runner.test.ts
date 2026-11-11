@@ -264,7 +264,8 @@ describe('runner 五阶段主流程', () => {
     expect(git.currentBranchCalls).toEqual([tempRoot]);
     expect(platform.payloads[0]?.baseBranch).toBe('main');
     expect(platform.payloads[0]?.reportComment).toBe(result.deliverable.summary);
-    expect(logLines.some((l) => l.message.includes('▶ stage:ingest'))).toBe(true);
+    // 日志通道只镜像 log 类事件;stage 事件属展示层,由 onEvent 承载。
+    expect(logLines.some((l) => l.message.includes('[ingest] 构建仓库上下文'))).toBe(true);
   });
 
   it('依赖序:t2 总在 t1 之后,t3 总在 t2 之后', async () => {

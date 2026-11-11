@@ -15,7 +15,7 @@ import { makeConsoleLogger } from './logger.js';
 import { LocalPlatformClient } from './local-platform.js';
 import { mapExitCode } from './exit-code.js';
 import { resolveGitRoot } from './git-root.js';
-import { renderEvent, renderFinalReport, renderPlan, renderStageBanner } from './render.js';
+import { renderEvent, renderFinalReport, renderPlan } from './render.js';
 import type { RunEnv, RunFlagValues } from './run-config.js';
 import { resolveRunConfig } from './run-config.js';
 import { resolveTaskInput } from './task-input.js';
@@ -35,8 +35,7 @@ export async function executeRun(
 ): Promise<RunResult> {
   const logger: Logger = makeConsoleLogger(console);
 
-  // [1/5 ingest] -----------------------------------------------
-  logger.info(renderStageBanner('ingest'));
+  // [1/5 ingest] banner 由流水线 stage 事件统一渲染(见 onEvent sink)。
   const task: TaskInput = await resolveTaskInput(flags);
 
   const cli = resolveRunConfig(flags, env);
@@ -61,10 +60,8 @@ export async function executeRun(
   let sawPlanEvent = false;
   const onEvent: EventSink = (event: PipelineEvent): void => {
     if (event.type === 'plan') sawPlanEvent = true;
-    if (event.type === 'log') {
-      logger[event.level](event.message);
-      return;
-    }
+    // log 类事件由核心的 logger 镜像负责打印,这里跳过以免双打。
+    if (event.type === 'log') return;
     for (const line of renderEvent(event)) logger.info(line);
   };
 

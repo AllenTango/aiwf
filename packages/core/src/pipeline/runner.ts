@@ -307,34 +307,14 @@ function silentLogger(): Logger {
   return { debug() {}, info() {}, warn() {}, error() {} };
 }
 
+/**
+ * 日志通道镜像:仅把 log 类事件写进 logger。
+ * 其余事件(stage/plan/task-dispatch/task-result/deliver)属于展示层职责,
+ * 由消费方的 onEvent 渲染(避免同一消息双打);结构化信息已在 RunResult 中。
+ */
 function mirrorToLogger(logger: Logger, event: PipelineEvent): void {
-  switch (event.type) {
-    case 'stage':
-      logger.info(`▶ stage:${event.stage}`);
-      break;
-    case 'plan':
-      logger.info(`▶ plan:${event.plan.tasks.length} 个任务 — ${event.plan.summary}`);
-      break;
-    case 'task-dispatch':
-      logger.info(`▶ task-dispatch:${event.taskId} → ${event.branch}`);
-      break;
-    case 'task-result': {
-      const line = `▶ task-result:${event.result.taskId} — ${event.result.status}(${
-        event.result.error ?? event.result.summary
-      })`;
-      if (event.result.status === 'failed') logger.error(line);
-      else if (event.result.status === 'partial') logger.warn(line);
-      else logger.info(line);
-      break;
-    }
-    case 'log':
-      logger[event.level](event.message);
-      break;
-    case 'deliver':
-      logger.info(
-        `▶ deliver:${event.deliverable.branch === '' ? '(no branch)' : event.deliverable.branch}`,
-      );
-      break;
+  if (event.type === 'log') {
+    logger[event.level](event.message);
   }
 }
 

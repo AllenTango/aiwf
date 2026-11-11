@@ -24951,31 +24951,8 @@ function silentLogger() {
   } };
 }
 function mirrorToLogger(logger, event) {
-  switch (event.type) {
-    case "stage":
-      logger.info(`\u25B6 stage:${event.stage}`);
-      break;
-    case "plan":
-      logger.info(`\u25B6 plan:${event.plan.tasks.length} \u4E2A\u4EFB\u52A1 \u2014 ${event.plan.summary}`);
-      break;
-    case "task-dispatch":
-      logger.info(`\u25B6 task-dispatch:${event.taskId} \u2192 ${event.branch}`);
-      break;
-    case "task-result": {
-      const line = `\u25B6 task-result:${event.result.taskId} \u2014 ${event.result.status}(${event.result.error ?? event.result.summary})`;
-      if (event.result.status === "failed") logger.error(line);
-      else if (event.result.status === "partial") logger.warn(line);
-      else logger.info(line);
-      break;
-    }
-    case "log":
-      logger[event.level](event.message);
-      break;
-    case "deliver":
-      logger.info(
-        `\u25B6 deliver:${event.deliverable.branch === "" ? "(no branch)" : event.deliverable.branch}`
-      );
-      break;
+  if (event.type === "log") {
+    logger[event.level](event.message);
   }
 }
 async function runWithLimit(items, limit, worker) {
