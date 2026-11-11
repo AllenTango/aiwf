@@ -1,9 +1,6 @@
 /**
- * Engine area: pluggable AI backends.
- *
- * OWNER: M2. Replace this file with the real barrel exports.
- * Export surface required by the pipeline and shells:
- *
- *   export { createEngine } from './factory.js'; // EngineConfig -> Engine ('opencode' | 'mock')
+ * Engine 区 barrel(导出名由队长约定,M1 总 barrel 依赖)。
  */
-export {};
+export { createEngine } from './factory.js';
+export { OpencodeEngine } from './opencode.js';
+export { MockEngine } from './mock.js';

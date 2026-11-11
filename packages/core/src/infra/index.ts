@@ -1,10 +1,5 @@
 /**
- * Infra area: git plumbing + repo snapshot building.
- *
- * OWNER: M2. Replace this file with the real barrel exports.
- * Export surface required by the pipeline and shells:
- *
- *   export { NodeGitOps }   from './git-ops.js';       // implements GitOps
- *   export { buildRepoContext } from './repo-context.js';
+ * Infra 区 barrel(导出名由队长约定,M1 总 barrel 依赖)。
  */
-export {};
+export { NodeGitOps } from './git-ops.js';
+export { buildRepoContext } from './repo-context.js';
