@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "minimax-cn-coding-plan": {
+      "models": {
+        "MiniMax-M3.1-Flash": {
+          "settings": {
+            "effort": "medium"
+          },
+          "body": {
+            "max_tokens": 524288
+          }
+        }
+      }
+    }
+  }
+}
