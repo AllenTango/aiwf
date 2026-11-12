@@ -154,8 +154,13 @@ function extractJsonCandidate(text: string): string {
 }
 
 function failParse(text: string, reason: string): never {
-  const head = text.trim().slice(0, 200);
-  throw new Error(`AIWF(opencode): 解析 plan JSON 失败——${reason}。原文本前 200 字: ${head}`);
+  const t = (text ?? '').trim();
+  const head = t.slice(0, 200);
+  const tail = t.slice(-200);
+  throw new Error(
+    `AIWF(opencode): 解析 plan JSON 失败——${reason}。` +
+    `原文本共 ${t.length} 字符;前 200 字: ${head}……尾部 200 字: ${tail}`,
+  );
 }
 
 /** 解析队长输出的 WorkflowPlan;必填缺失/非法 → 描述性中文错误。 */

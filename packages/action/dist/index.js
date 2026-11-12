@@ -25276,8 +25276,12 @@ function extractJsonCandidate(text) {
   return candidate.slice(start, end + 1);
 }
 function failParse(text, reason) {
-  const head = text.trim().slice(0, 200);
-  throw new Error(`AIWF(opencode): \u89E3\u6790 plan JSON \u5931\u8D25\u2014\u2014${reason}\u3002\u539F\u6587\u672C\u524D 200 \u5B57: ${head}`);
+  const t = (text ?? "").trim();
+  const head = t.slice(0, 200);
+  const tail2 = t.slice(-200);
+  throw new Error(
+    `AIWF(opencode): \u89E3\u6790 plan JSON \u5931\u8D25\u2014\u2014${reason}\u3002\u539F\u6587\u672C\u5171 ${t.length} \u5B57\u7B26;\u524D 200 \u5B57: ${head}\u2026\u2026\u5C3E\u90E8 200 \u5B57: ${tail2}`
+  );
 }
 function parsePlanJson(text) {
   if (!text || !text.trim()) failParse(text ?? "", "\u8F93\u51FA\u4E3A\u7A7A");
