@@ -391,6 +391,9 @@ function runCommand(opts: RunCommandOptions): Promise<RunCommandResult> {
       env: opts.env,
       windowsHide: true,
       shell: opts.shell,
+      // stdin 显式丢弃:默认 'pipe' 会给子进程一个永不 EOF 的管道,
+      // opencode 在非 TTY 下会尝试从 stdin 读输入而永远静默阻塞(CI 首跑 10 分钟零输出挂死的根因)。
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     const out: Buffer[] = [];
@@ -476,8 +479,8 @@ export class OpencodeEngine implements Engine {
     const r = await this.runImpl({ file, shell, argv, cwd: req.repo.rootDir, env, timeoutMs });
     if (r.code !== 0) {
       throw new Error(
-        `AIWF(opencode): plan 阶段调用 opencode 失败(退出码 ${r.code}${r.timedOut ? ',超时被杀' : ''};${note})); ` +
-        `stderr 尾部: ${(r.stderr || '(空)').trim().slice(-600)}`,
+        `AIWF(opencode): plan 阶段调用 opencode 失败(退出码 ${r.code}${r.timedOut ? `,超过 ${Math.round(timeoutMs / 1000)}s 超时被杀` : ''};${note})); ` +
+        `stderr 尾部: ${(r.stderr || '(空)').trim().slice(-600)};stdout 尾部: ${(r.stdout || '(空)').trim().slice(-600)}`,
       );
     }
     return parsePlanJson(r.stdout);

@@ -25444,7 +25444,10 @@ function runCommand(opts) {
       cwd: opts.cwd,
       env: opts.env,
       windowsHide: true,
-      shell: opts.shell
+      shell: opts.shell,
+      // stdin 显式丢弃:默认 'pipe' 会给子进程一个永不 EOF 的管道,
+      // opencode 在非 TTY 下会尝试从 stdin 读输入而永远静默阻塞(CI 首跑 10 分钟零输出挂死的根因)。
+      stdio: ["ignore", "pipe", "pipe"]
     });
     const out = [];
     const err = [];
@@ -25504,7 +25507,7 @@ var OpencodeEngine = class {
     const r = await this.runImpl({ file, shell, argv, cwd: req.repo.rootDir, env, timeoutMs });
     if (r.code !== 0) {
       throw new Error(
-        `AIWF(opencode): plan \u9636\u6BB5\u8C03\u7528 opencode \u5931\u8D25(\u9000\u51FA\u7801 ${r.code}${r.timedOut ? ",\u8D85\u65F6\u88AB\u6740" : ""};${note})); stderr \u5C3E\u90E8: ${(r.stderr || "(\u7A7A)").trim().slice(-600)}`
+        `AIWF(opencode): plan \u9636\u6BB5\u8C03\u7528 opencode \u5931\u8D25(\u9000\u51FA\u7801 ${r.code}${r.timedOut ? `,\u8D85\u8FC7 ${Math.round(timeoutMs / 1e3)}s \u8D85\u65F6\u88AB\u6740` : ""};${note})); stderr \u5C3E\u90E8: ${(r.stderr || "(\u7A7A)").trim().slice(-600)};stdout \u5C3E\u90E8: ${(r.stdout || "(\u7A7A)").trim().slice(-600)}`
       );
     }
     return parsePlanJson(r.stdout);
