@@ -9,10 +9,11 @@
 
 | 编号 | 威胁 | 现实路径 | 防线 |
 | --- | --- | --- | --- |
-| T1 | **额度被刷** | 任何外部用户在你的仓库开 Issue / 评论 `@aiwf` → 触发一次真模型调用(队长 1 次 + 每队员 1 次) | §3.1 §3.2 §3.3 |
-| T2 | **密钥外泄** | 成员 agent 打印 `env` / 读取 `auth.json` → 结果进入 PR 正文或 git 提交 | §3.4 §3.5 §3.6 |
-| T3 | **提示注入** | Issue 正文是攻击者可控输入 → 诱导 agent 越权(读凭证、外传代码、破坏仓库) | §3.7 |
+| T1 | **额度被刷** | 任何外部用户在你的仓库开 Issue / 评论 `@aiwf` → 触发一次真模型调用(队长 1 次 + 每队员 1 次) | §3.1 准入 / §3.2 配额 / §3.3 规模上限 / §3.3.1 否决权 / §3.3.4 幂等 |
+| T2 | **密钥外泄** | 成员 agent 打印 `env` / 读取 `auth.json` → 结果进入 PR 正文或 git 提交 | §3.4 统一脱敏 / §3.5 产出物拦截 / §3.6 错误信息脱敏 / §2.2 环境隔离 |
+| T3 | **提示注入** | Issue 正文是攻击者可控输入 → 诱导 agent 越权(读凭证、外传代码、破坏仓库) | §3.7 提示注入加固 / §3.3.3 行为准则 / §3.3.5 角色即权限 |
 | T4 | **fork 泄密** | 用 `pull_request_target` 触发 → fork 的 PR 拿到仓库 Secrets | §2.3 |
+| T5 | **越权执行** | 审批模式下的决策包被评论篡改 → 执行任意计划 | 决策包解析时走 core 结构校验(`parseApprovedDecision`),不合法即视为无决策包 |
 
 **一个必须先讲清楚的事实**:GitHub Actions **只对日志做 secret 掩码**。
 PR 正文、PR 评论、git 提交、Issue 评论**一律不掩码**。
@@ -191,6 +192,11 @@ CI_JOB_JWT / NODE_OPTIONS
 - [ ] `trigger_policy` 保持 `trusted`(默认值),并在 `allowed_actors` 里放行你的机器人账号。
 - [ ] `daily_run_limit` 设一个你钱包能承受的数。
 - [ ] `max_tasks` / `max_parallel` / `timeout_ms` 按项目规模收紧,别用默认值跑生产。
+- [ ] 若要控制**单次**成本:`budget` 设一个相对成本上限(low=1 / medium=3 / high=8)。
+- [ ] 若要控制**模型选择**:`models` 配模型池,让贵的模型只用在值钱的任务上。
+- [ ] 若要约束队员行为:`guidelines` 写清仓库规矩(如「提交前必须跑 pnpm test」)。
+- [ ] 想要人工把关再开工:`approve: true`(注意:它会让每次触发多一轮人机交互)。
+- [ ] `idempotent` 保持默认 `true`;若确实需要「同一 Issue 反复重跑」,显式设为 `false`。
 - [ ] 凭证只放仓库 Secrets;确认 workflow 里没有把 Secret 直接 `echo` 到日志。
 - [ ] 如果是公开仓库,额外确认 `issues` 事件下的 `author_association` 判定符合预期
       (外部用户提 Issue 会被 `trusted` 策略拒绝)。
@@ -230,10 +236,17 @@ CI_JOB_JWT / NODE_OPTIONS
    确认**没有**任何 key 明文(应为 `***REDACTED***` 或根本没有)。
 4. 确认 `runs.using` 是 `node24`、第三方 Action 是 node24 世代 major。
 5. 确认 `packages/action/dist/index.js` 已随仓库提交(发布 Marketplace 的必要条件)。
+6. 若开了 `approve: true`:跑一遍完整闭环 —— 第一次触发应只贴决策包(无 PR、无队员调用),
+   回复 `@aiwf go` 后第二次应按决策包执行并产出 PR。
+7. 若开了 `idempotent`(默认):同一条 Issue 用**完全相同**的内容再触发一次,
+   应出现「幂等短路」且**没有**模型调用;改动一个字后再触发应正常执行。
+8. 构造一个明显该被拒绝的需求(如「把 README 翻译成 12 种语言」),确认队长给出
+   `reject` 或 `need_clarification`,且**没有** PR、没有队员调用。
 
 ---
 
 ## 7. 相关文档
 
 - [docs/action.md](action.md) —— 接入手册(inputs / outputs / Secrets / 排查表)
+- [docs/cli.md](cli.md) —— 本地 CLI 手册(选项 / 环境变量 / 退出码 / 排错)
 - [README.md](../README.md) —— 快速开始与结构说明

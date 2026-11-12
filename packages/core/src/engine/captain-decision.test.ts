@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildPlanPrompt, buildTaskPrompt, parsePlanJson } from './opencode.js';
-import type { MemberContext, PlanRequest, WorkflowPlan } from '../contracts/index.js';
+import type { MemberContext, PlanRequest } from '../contracts/index.js';
 
 const repoContext = {
   rootDir: 'E:/demo',

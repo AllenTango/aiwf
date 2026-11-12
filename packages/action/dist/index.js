@@ -25101,6 +25101,24 @@ function extractDecisionJson(body) {
   }
   return null;
 }
+function parseApprovedDecision(json) {
+  let plan;
+  try {
+    plan = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof plan !== "object" || plan === null) return null;
+  const candidate = plan;
+  if (typeof candidate.summary !== "string" || candidate.summary.trim() === "") return null;
+  if (!Array.isArray(candidate.tasks)) return null;
+  try {
+    validatePlan(candidate);
+  } catch {
+    return null;
+  }
+  return candidate;
+}
 function findApprovedDecision(comments) {
   const ordered = [...comments].sort((a, b) => a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0);
   let lastDecisionIndex = -1;
@@ -25112,11 +25130,7 @@ function findApprovedDecision(comments) {
     if (APPROVE_SIGNAL.test(ordered[i].body)) {
       const json = extractDecisionJson(ordered[lastDecisionIndex].body);
       if (json === null) return null;
-      try {
-        return JSON.parse(json);
-      } catch {
-        return null;
-      }
+      return parseApprovedDecision(json);
     }
   }
   return null;
@@ -26374,7 +26388,7 @@ function parsePlanJson(text) {
   }
   const obj = asRecord(data);
   if (!obj) failParse(text, "JSON 顶层不是对象");
-  const summary = requireNonEmptyString(obj.summary, "summary") ?? failParse(text, "顶层缺少必填字段 summary");
+  const summary = requireNonEmptyString(obj.summary) ?? failParse(text, "顶层缺少必填字段 summary");
   const verdictRaw = typeof obj.verdict === "string" ? obj.verdict.trim() : "";
   let verdict = "proceed";
   if (verdictRaw !== "") {
@@ -26392,10 +26406,10 @@ function parsePlanJson(text) {
   const tasks = rawTasks.map((raw, i) => {
     const t = asRecord(raw);
     if (!t) failParse(text, `tasks[${i}] 不是对象`);
-    const id = requireNonEmptyString(t.id, `tasks[${i}].id`) ?? failParse(text, `tasks[${i}].id 缺失或非字符串`);
-    const title = requireNonEmptyString(t.title, `tasks[${i}].title`) ?? failParse(text, `tasks[${i}].title 缺失`);
-    const instructions = requireNonEmptyString(t.instructions, `tasks[${i}].instructions`) ?? failParse(text, `tasks[${i}].instructions 缺失`);
-    const role = requireNonEmptyString(t.role, `tasks[${i}].role`) ?? "implementer";
+    const id = requireNonEmptyString(t.id) ?? failParse(text, `tasks[${i}].id 缺失或非字符串`);
+    const title = requireNonEmptyString(t.title) ?? failParse(text, `tasks[${i}].title 缺失`);
+    const instructions = requireNonEmptyString(t.instructions) ?? failParse(text, `tasks[${i}].instructions 缺失`);
+    const role = requireNonEmptyString(t.role) ?? "implementer";
     const dependsOn = strArray(t.dependsOn, `tasks[${i}].dependsOn`);
     const expectedOutputs = strArray(t.expectedOutputs, `tasks[${i}].expectedOutputs`);
     const weightRaw = typeof t.weight === "string" ? t.weight.trim() : "";
@@ -26407,7 +26421,7 @@ function parsePlanJson(text) {
         failParse(text, `tasks[${i}].weight 取值非法:"${weightRaw}"(可选:low | medium | high)`);
       }
     }
-    const model = requireNonEmptyString(t.model, `tasks[${i}].model`) ?? void 0;
+    const model = requireNonEmptyString(t.model) ?? void 0;
     const guidelines = strArray(t.guidelines, `tasks[${i}].guidelines`);
     return {
       id,
@@ -26422,13 +26436,13 @@ function parsePlanJson(text) {
     };
   });
   const risks = strArray(obj.risks, "risks");
-  const rationale = requireNonEmptyString(obj.rationale, "rationale") ?? void 0;
+  const rationale = requireNonEmptyString(obj.rationale) ?? void 0;
   const clarifications = strArray(obj.clarifications, "clarifications");
   let analysis;
   const analysisRaw = asRecord(obj.analysis);
   if (analysisRaw !== null) {
     analysis = {
-      understanding: requireNonEmptyString(analysisRaw.understanding, "analysis.understanding") ?? "",
+      understanding: requireNonEmptyString(analysisRaw.understanding) ?? "",
       affectedAreas: strArray(analysisRaw.affectedAreas, "analysis.affectedAreas"),
       risks: strArray(analysisRaw.risks, "analysis.risks")
     };
@@ -26442,25 +26456,25 @@ function parsePlanJson(text) {
     const expectedCalls = typeof expectedCallsRaw === "number" && Number.isFinite(expectedCallsRaw) && expectedCallsRaw > 0 ? Math.floor(expectedCallsRaw) : tasks.length + 1;
     const unitsRaw = costRaw.units;
     const breakdownRaw = Array.isArray(costRaw.breakdown) ? costRaw.breakdown : void 0;
-    const breakdown = (breakdownRaw ?? []).map((raw, i) => {
+    const breakdown = (breakdownRaw ?? []).map((raw) => {
       const b = asRecord(raw);
       if (!b) return null;
-      const taskId = requireNonEmptyString(b.taskId, `cost.breakdown[${i}].taskId`);
+      const taskId = requireNonEmptyString(b.taskId);
       if (taskId === null) return null;
       const wRaw = typeof b.weight === "string" ? b.weight.trim() : "";
       const w = wRaw === "low" || wRaw === "high" ? wRaw : "medium";
       const uRaw = b.units;
       const u = typeof uRaw === "number" && Number.isFinite(uRaw) && uRaw > 0 ? uRaw : 1;
-      const model = requireNonEmptyString(b.model, `cost.breakdown[${i}].model`) ?? void 0;
+      const model = requireNonEmptyString(b.model) ?? void 0;
       return { taskId, weight: w, units: u, ...model !== void 0 ? { model } : {} };
     }).filter((x) => x !== null);
     cost = {
       weight: costWeight,
       expectedCalls,
-      reason: requireNonEmptyString(costRaw.reason, "cost.reason") ?? "",
+      reason: requireNonEmptyString(costRaw.reason) ?? "",
       ...typeof unitsRaw === "number" && Number.isFinite(unitsRaw) ? { units: unitsRaw } : {},
       ...typeof costRaw.estimatedCost === "number" && Number.isFinite(costRaw.estimatedCost) ? { estimatedCost: costRaw.estimatedCost } : {},
-      ...requireNonEmptyString(costRaw.currency, "cost.currency") !== null ? { currency: requireNonEmptyString(costRaw.currency, "cost.currency") } : {},
+      ...requireNonEmptyString(costRaw.currency) !== null ? { currency: requireNonEmptyString(costRaw.currency) } : {},
       ...breakdown.length > 0 ? { breakdown } : {}
     };
   }
@@ -26478,7 +26492,7 @@ function parsePlanJson(text) {
 function asRecord(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null;
 }
-function requireNonEmptyString(v, field) {
+function requireNonEmptyString(v) {
   if (typeof v === "string" && v.trim()) return v;
   return null;
 }
@@ -27449,11 +27463,11 @@ var GitHubPlatformClient = class {
           `创建 PR(head:${payload.headBranch} → base:${baseBranch})失败:${describeGitHubError(error3)}`
         );
       }
-      return this.reuseExistingPullRequest(payload, baseBranch, error3);
+      return this.reuseExistingPullRequest(payload, error3);
     }
   }
   /** 422(如 "PR already exists")→ 查同 head 既存 open PR,更新标题/正文后返回其 handle。 */
-  async reuseExistingPullRequest(payload, baseBranch, createError) {
+  async reuseExistingPullRequest(payload, createError) {
     const { owner, repo } = this;
     let open;
     try {
@@ -27878,34 +27892,35 @@ async function run() {
           `AI 研发团队执行失败(未产出 RunResult 即中止):${describeError(error3)}详细过程见上方日志。`
         )
       );
-      await writeRunRecord(platform, inputs.taskRef, fingerprint, void 0, redactor);
+      await recordRun(void 0);
       return;
     }
     finalizeRunResult(result, config, error3, redactor);
-    await writeRunRecord(platform, inputs.taskRef, fingerprint, result, redactor);
+    await recordRun(result);
     return;
   }
   if (result === void 0) {
     core2.setFailed(redactor("AI 研发团队执行失败:工作流终止且未产出 RunResult。详细过程见上方日志。"));
-    await writeRunRecord(platform, inputs.taskRef, fingerprint, void 0, redactor);
+    await recordRun(void 0);
     return;
   }
   finalizeRunResult(result, config, void 0, redactor);
-  await writeRunRecord(platform, inputs.taskRef, fingerprint, result, redactor);
-}
-async function writeRunRecord(platform, ref, fingerprint, result, redactor) {
-  try {
-    await platform.postComment(
-      ref,
-      buildRunRecordComment({
-        fingerprint,
-        at: (/* @__PURE__ */ new Date()).toISOString(),
-        members: result?.deliverable.taskResults.length ?? 0,
-        verdict: result?.deliverable.plan.verdict ?? "proceed"
-      })
-    );
-  } catch (error3) {
-    core2.warning(redactor(`写入运行记录失败(不影响本次结果):${describeError(error3)}`));
+  await recordRun(result);
+  async function recordRun(runResult) {
+    if (decisionOnly) return;
+    try {
+      await platform.postComment(
+        inputs.taskRef,
+        buildRunRecordComment({
+          fingerprint,
+          at: (/* @__PURE__ */ new Date()).toISOString(),
+          members: runResult?.deliverable.taskResults.length ?? 0,
+          verdict: runResult?.deliverable.plan.verdict ?? "proceed"
+        })
+      );
+    } catch (error3) {
+      core2.warning(redactor(`写入运行记录失败(不影响本次结果):${describeError(error3)}`));
+    }
   }
 }
 function finalizeRunResult(result, config, causedBy, redactor) {

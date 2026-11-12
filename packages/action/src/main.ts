@@ -348,48 +348,44 @@ export async function run(): Promise<void> {
           `AI 研发团队执行失败(未产出 RunResult 即中止):${describeError(error)}详细过程见上方日志。`,
         ),
       );
-      await writeRunRecord(platform, inputs.taskRef, fingerprint, undefined, redactor);
+      await recordRun(undefined);
       return;
     }
     // 防御:runner 同时返回结果又抛出时,按"有产出但可能缺 PR"降级处理。
     finalizeRunResult(result, config, error, redactor);
-    await writeRunRecord(platform, inputs.taskRef, fingerprint, result, redactor);
+    await recordRun(result);
     return;
   }
   if (result === undefined) {
     // 防御:类型上 run() 要么产出结果要么抛错;此处兜底保持同语义。
     core.setFailed(redactor('AI 研发团队执行失败:工作流终止且未产出 RunResult。详细过程见上方日志。'));
-    await writeRunRecord(platform, inputs.taskRef, fingerprint, undefined, redactor);
+    await recordRun(undefined);
     return;
   }
   finalizeRunResult(result, config, undefined, redactor);
-  await writeRunRecord(platform, inputs.taskRef, fingerprint, result, redactor);
-}
+  await recordRun(result);
 
-/**
- * 写下本次运行记录(HTML 注释,用户不可见),供下次幂等比对。
- *
- * 失败不阻断:运行记录只是优化手段,写不进去不该让整次运行失败。
- */
-async function writeRunRecord(
-  platform: GitHubPlatformClient,
-  ref: string,
-  fingerprint: string,
-  result: RunResult | undefined,
-  redactor: Redactor,
-): Promise<void> {
-  try {
-    await platform.postComment(
-      ref,
-      buildRunRecordComment({
-        fingerprint,
-        at: new Date().toISOString(),
-        members: result?.deliverable.taskResults.length ?? 0,
-        verdict: result?.deliverable.plan.verdict ?? 'proceed',
-      }),
-    );
-  } catch (error) {
-    core.warning(redactor(`写入运行记录失败(不影响本次结果):${describeError(error)}`));
+  /**
+   * 写下本次运行记录(供下次幂等比对)。
+   *
+   * ⚠️ **审批模式的第一轮不写记录**:那一轮只产出决策包、没派任何队员,
+   * 若写记录,人批准后的第二轮会因「指纹相同」被幂等短路 —— 决策包永远执行不了。
+   */
+  async function recordRun(runResult: RunResult | undefined): Promise<void> {
+    if (decisionOnly) return;
+    try {
+      await platform.postComment(
+        inputs.taskRef,
+        buildRunRecordComment({
+          fingerprint,
+          at: new Date().toISOString(),
+          members: runResult?.deliverable.taskResults.length ?? 0,
+          verdict: runResult?.deliverable.plan.verdict ?? 'proceed',
+        }),
+      );
+    } catch (error) {
+      core.warning(redactor(`写入运行记录失败(不影响本次结果):${describeError(error)}`));
+    }
   }
 }
 

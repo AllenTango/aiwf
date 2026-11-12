@@ -214,14 +214,13 @@ export class GitHubPlatformClient implements PlatformClient {
           `创建 PR(head:${payload.headBranch} → base:${baseBranch})失败:${describeGitHubError(error)}`,
         );
       }
-      return this.reuseExistingPullRequest(payload, baseBranch, error);
+      return this.reuseExistingPullRequest(payload, error);
     }
   }
 
   /** 422(如 "PR already exists")→ 查同 head 既存 open PR,更新标题/正文后返回其 handle。 */
   private async reuseExistingPullRequest(
     payload: PullRequestPayload,
-    baseBranch: string,
     createError: unknown,
   ): Promise<PullRequestHandle> {
     const { owner, repo } = this;

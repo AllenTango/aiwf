@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { MockEngine } from './mock.js';
-import type { EngineConfig, MemberContext, PlanRequest, WorkflowPlan } from '../contracts/index.js';
+import type { EngineConfig, MemberContext, PlanRequest } from '../contracts/index.js';
 
 const cfg: EngineConfig = { kind: 'mock' };
 

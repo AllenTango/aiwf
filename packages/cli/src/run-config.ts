@@ -128,17 +128,7 @@ const overrideString = (
   envValue: string | undefined,
 ): string | undefined => clean(flag) ?? clean(envValue);
 
-function parsePositiveInt(
-  raw: string | undefined,
-  label: string,
-): number | undefined {
-  if (raw === undefined) return undefined;
-  const value = Number(raw.trim());
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new UsageError(`${label} 必须是正整数,收到:"${raw}"。`);
-  }
-  return value;
-}
+
 
 /**
  * 解析一个落在 [min, max] 闭区间内的整数。

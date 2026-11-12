@@ -448,7 +448,7 @@ export function parsePlanJson(text: string): WorkflowPlan {
   const obj = asRecord(data);
   if (!obj) failParse(text, 'JSON 顶层不是对象');
 
-  const summary = requireNonEmptyString(obj.summary, 'summary') ?? failParse(text, '顶层缺少必填字段 summary');
+  const summary = requireNonEmptyString(obj.summary) ?? failParse(text, '顶层缺少必填字段 summary');
 
   // ---- 裁决(缺省 proceed,兼容旧计划) ----
   const verdictRaw = typeof obj.verdict === 'string' ? obj.verdict.trim() : '';
@@ -473,10 +473,10 @@ export function parsePlanJson(text: string): WorkflowPlan {
   const tasks = rawTasks.map((raw, i) => {
     const t = asRecord(raw);
     if (!t) failParse(text, `tasks[${i}] 不是对象`);
-    const id = requireNonEmptyString(t.id, `tasks[${i}].id`) ?? failParse(text, `tasks[${i}].id 缺失或非字符串`);
-    const title = requireNonEmptyString(t.title, `tasks[${i}].title`) ?? failParse(text, `tasks[${i}].title 缺失`);
-    const instructions = requireNonEmptyString(t.instructions, `tasks[${i}].instructions`) ?? failParse(text, `tasks[${i}].instructions 缺失`);
-    const role = requireNonEmptyString(t.role, `tasks[${i}].role`) ?? 'implementer';
+    const id = requireNonEmptyString(t.id) ?? failParse(text, `tasks[${i}].id 缺失或非字符串`);
+    const title = requireNonEmptyString(t.title) ?? failParse(text, `tasks[${i}].title 缺失`);
+    const instructions = requireNonEmptyString(t.instructions) ?? failParse(text, `tasks[${i}].instructions 缺失`);
+    const role = requireNonEmptyString(t.role) ?? 'implementer';
     const dependsOn = strArray(t.dependsOn, `tasks[${i}].dependsOn`);
     const expectedOutputs = strArray(t.expectedOutputs, `tasks[${i}].expectedOutputs`);
     // 可选字段:weight / model / guidelines
@@ -489,7 +489,7 @@ export function parsePlanJson(text: string): WorkflowPlan {
         failParse(text, `tasks[${i}].weight 取值非法:"${weightRaw}"(可选:low | medium | high)`);
       }
     }
-    const model = requireNonEmptyString(t.model, `tasks[${i}].model`) ?? undefined;
+    const model = requireNonEmptyString(t.model) ?? undefined;
     const guidelines = strArray(t.guidelines, `tasks[${i}].guidelines`);
     return {
       id,
@@ -505,7 +505,7 @@ export function parsePlanJson(text: string): WorkflowPlan {
   });
 
   const risks = strArray(obj.risks, 'risks');
-  const rationale = requireNonEmptyString(obj.rationale, 'rationale') ?? undefined;
+  const rationale = requireNonEmptyString(obj.rationale) ?? undefined;
   const clarifications = strArray(obj.clarifications, 'clarifications');
 
   // ---- 分析产物 ----
@@ -513,7 +513,7 @@ export function parsePlanJson(text: string): WorkflowPlan {
   const analysisRaw = asRecord(obj.analysis);
   if (analysisRaw !== null) {
     analysis = {
-      understanding: requireNonEmptyString(analysisRaw.understanding, 'analysis.understanding') ?? '',
+      understanding: requireNonEmptyString(analysisRaw.understanding) ?? '',
       affectedAreas: strArray(analysisRaw.affectedAreas, 'analysis.affectedAreas'),
       risks: strArray(analysisRaw.risks, 'analysis.risks'),
     };
@@ -534,29 +534,29 @@ export function parsePlanJson(text: string): WorkflowPlan {
     const unitsRaw = costRaw.units;
     const breakdownRaw = Array.isArray(costRaw.breakdown) ? costRaw.breakdown : undefined;
     const breakdown: PlanCostItem[] = (breakdownRaw ?? [])
-      .map((raw, i) => {
+      .map((raw) => {
         const b = asRecord(raw);
         if (!b) return null;
-        const taskId = requireNonEmptyString(b.taskId, `cost.breakdown[${i}].taskId`);
+        const taskId = requireNonEmptyString(b.taskId);
         if (taskId === null) return null;
         const wRaw = typeof b.weight === 'string' ? b.weight.trim() : '';
         const w: TaskWeight = wRaw === 'low' || wRaw === 'high' ? wRaw : 'medium';
         const uRaw = b.units;
         const u = typeof uRaw === 'number' && Number.isFinite(uRaw) && uRaw > 0 ? uRaw : 1;
-        const model = requireNonEmptyString(b.model, `cost.breakdown[${i}].model`) ?? undefined;
+        const model = requireNonEmptyString(b.model) ?? undefined;
         return { taskId, weight: w, units: u, ...(model !== undefined ? { model } : {}) };
       })
       .filter((x): x is PlanCostItem => x !== null);
     cost = {
       weight: costWeight,
       expectedCalls,
-      reason: requireNonEmptyString(costRaw.reason, 'cost.reason') ?? '',
+      reason: requireNonEmptyString(costRaw.reason) ?? '',
       ...(typeof unitsRaw === 'number' && Number.isFinite(unitsRaw) ? { units: unitsRaw } : {}),
       ...(typeof costRaw.estimatedCost === 'number' && Number.isFinite(costRaw.estimatedCost)
         ? { estimatedCost: costRaw.estimatedCost }
         : {}),
-      ...(requireNonEmptyString(costRaw.currency, 'cost.currency') !== null
-        ? { currency: requireNonEmptyString(costRaw.currency, 'cost.currency') as string }
+      ...(requireNonEmptyString(costRaw.currency) !== null
+        ? { currency: requireNonEmptyString(costRaw.currency) as string }
         : {}),
       ...(breakdown.length > 0 ? { breakdown } : {}),
     };
@@ -578,7 +578,7 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
-function requireNonEmptyString(v: unknown, field: string): string | null {
+function requireNonEmptyString(v: unknown): string | null {
   if (typeof v === 'string' && v.trim()) return v;
   return null;
 }

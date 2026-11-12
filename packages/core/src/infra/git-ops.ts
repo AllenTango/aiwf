@@ -415,9 +415,4 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-/** Windows 大小写不敏感 + 分隔符归一化的目录等价比较。 */
-function isSameDir(a: string, b: string): boolean {
-  const na = path.normalize(a).replace(/[/\\]+$/, '');
-  const nb = path.normalize(b).replace(/[/\\]+$/, '');
-  return na.toLowerCase() === nb.toLowerCase();
-}
+

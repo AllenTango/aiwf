@@ -17,6 +17,7 @@
 
 import type { WorkflowPlan } from '../contracts/index.js';
 import { clampLine } from './md.js';
+import { validatePlan } from './plan-utils.js';
 
 /** 决策包评论的协议前缀。 */
 export const DECISION_MARKER = 'AIWF_DECISION:';
@@ -63,10 +64,36 @@ export function extractDecisionJson(body: string): string | null {
 }
 
 /**
+ * 解析并**校验**一份决策包 JSON(来自 Issue 评论)。
+ *
+ * 为什么必须校验:决策包 JSON 存放在 Issue 评论里,评论是可编辑的。
+ * 裸 `JSON.parse` 会让一条被篡改的评论直接变成「要执行的计划」。
+ * 这里复用 core 的结构校验(任务 id 唯一 / 依赖存在 / 无环),不合法 → null(视为无决策包)。
+ */
+export function parseApprovedDecision(json: string): WorkflowPlan | null {
+  let plan: unknown;
+  try {
+    plan = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof plan !== 'object' || plan === null) return null;
+  const candidate = plan as WorkflowPlan;
+  if (typeof candidate.summary !== 'string' || candidate.summary.trim() === '') return null;
+  if (!Array.isArray(candidate.tasks)) return null;
+  try {
+    validatePlan(candidate);
+  } catch {
+    return null;
+  }
+  return candidate;
+}
+
+/**
  * 在评论流里找出「待批准的决策包」。
  *
  * 规则:取**最后一个**带决策包的评论,再看它之后有没有 `@aiwf go` 批准信号。
- *   - 有 → 该决策包已获批准,返回它;
+ *   - 有 → 该决策包已获批准,返回它(经校验);
  *   - 没有 → 返回 null(表示需要人先批准)。
  *
  * 决策包之后的普通评论(不含 go)不影响判定。
@@ -82,11 +109,7 @@ export function findApprovedDecision(comments: readonly IssueComment[]): Workflo
     if (APPROVE_SIGNAL.test(ordered[i]!.body)) {
       const json = extractDecisionJson(ordered[lastDecisionIndex]!.body);
       if (json === null) return null;
-      try {
-        return JSON.parse(json) as WorkflowPlan;
-      } catch {
-        return null;
-      }
+      return parseApprovedDecision(json);
     }
   }
   return null;

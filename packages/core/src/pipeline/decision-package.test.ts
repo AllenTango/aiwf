@@ -12,6 +12,7 @@ import {
   buildDecisionSummary,
   extractDecisionJson,
   findApprovedDecision,
+  parseApprovedDecision,
   type IssueComment,
 } from './decision-package.js';
 
@@ -106,6 +107,38 @@ describe('findApprovedDecision', () => {
     expect(APPROVE_SIGNAL.test('@AIWF GO')).toBe(true);
     expect(APPROVE_SIGNAL.test('@aiwf go 执行')).toBe(true);
     expect(APPROVE_SIGNAL.test('@aiwf 走了')).toBe(false);
+  });
+});
+
+describe('parseApprovedDecision', () => {
+  it('合法决策包 → 解析成功', () => {
+    const parsed = parseApprovedDecision(JSON.stringify(plan));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.tasks).toHaveLength(1);
+  });
+
+  it('非法 JSON / 结构不合法 / 缺 summary → null(不被评论篡改带偏)', () => {
+    expect(parseApprovedDecision('{不是 json')).toBeNull();
+    expect(parseApprovedDecision(JSON.stringify({ tasks: [] }))).toBeNull();
+    expect(parseApprovedDecision(JSON.stringify({ summary: 's', tasks: 'not-array' }))).toBeNull();
+    // 依赖了不存在的任务 → 结构校验不通过
+    expect(
+      parseApprovedDecision(
+        JSON.stringify({
+          summary: 's',
+          tasks: [{ id: 't1', title: 't', instructions: 'i', dependsOn: ['ghost'], expectedOutputs: [] }],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('findApprovedDecision 遇到被篡改的决策包 → null', () => {
+    const tampered = JSON.stringify({ summary: 'x', tasks: [{ id: 't1' }] });
+    const comments = [
+      comment(`${DECISION_MARKER}${tampered}`, '2026-01-01T00:01:00Z'),
+      comment('@aiwf go', '2026-01-01T00:02:00Z'),
+    ];
+    expect(findApprovedDecision(comments)).toBeNull();
   });
 });
 

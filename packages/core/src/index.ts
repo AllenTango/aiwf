@@ -52,6 +52,7 @@ export {
   buildDecisionSummary,
   extractDecisionJson,
   findApprovedDecision,
+  parseApprovedDecision,
 } from './pipeline/decision-package.js';
 export type { IssueComment } from './pipeline/decision-package.js';
 export {

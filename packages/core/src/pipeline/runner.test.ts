@@ -106,12 +106,12 @@ class FakeGitOps implements GitOps {
     this.merges.push({ receiveDir, branch });
   }
 
-  async removeWorktree(rootDir: string, worktreeDir: string): Promise<void> {
+  async removeWorktree(_rootDir: string, worktreeDir: string): Promise<void> {
     this.ops.push('removeWorktree');
     this.removedWorktrees.push(worktreeDir);
   }
 
-  async pushBranch(rootDir: string, branch: string, remote?: string): Promise<void> {
+  async pushBranch(_rootDir: string, branch: string, remote?: string): Promise<void> {
     this.ops.push(`pushBranch:${branch}:${remote ?? ''}`);
   }
 }

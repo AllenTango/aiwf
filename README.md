@@ -120,21 +120,45 @@ outputs:`pr-url` / `branch` / `summary`;PR 已存在时
 - **可选两段式** —— `approve: true` 时队长只贴决策包,人回 `@aiwf go` 才执行(省一次队长调用)。
 - **不重复烧额度** —— 内容没变(`idempotent`)直接跳过,不重复派员。
 
+## 本地 CLI(`aiwf`)
+
+同一套核心流水线,跑在本地任意 git 仓库上:
+
+```bash
+pnpm build
+node packages/cli/dist/main.js run --inline "给 README 增加 Quick Start 段落" --dry-run
+node packages/cli/dist/main.js run --from task.md --engine mock
+```
+
+CLI 与 Action 共用队长、队员、合成、脱敏与成本护栏,差异只在平台适配层
+(CLI 没有触发准入/每日配额/幂等短路/两段式审批 —— 本地由你自己发起)。
+完整选项、环境变量、退出码与排错见 **[docs/cli.md](docs/cli.md)**。
+
 ## 安全与额度
 
-本 Action 会调用真实模型,因此**额度与密钥**是首要风险面。仓库内置七道防线:
+本 Action 会调用真实模型,因此**额度与密钥**是首要风险面。仓库内置的防线:
+
+**额度侧**
 
 1. **触发准入**:`trigger_policy: trusted`(默认)只放行 OWNER/MEMBER/COLLABORATOR
    或 `allowed_actors` 白名单 —— 外部用户开 Issue 无法消耗你的额度。
 2. **每日配额**:`daily_run_limit` 限制单日运行次数(需 `actions: read` 权限)。
 3. **规模上限**:`max_tasks` / `max_parallel` / `timeout_ms` + 墙钟预算,限制单次运行的
    模型调用次数与时长。
-4. **环境隔离**:`GITHUB_TOKEN` 等平台凭证不会传进模型进程,成员 agent 拿不到。
-5. **统一脱敏**:日志、PR 标题/正文/评论、成员总结全部过脱敏器(GitHub **不掩码** PR 正文)。
-6. **产出物拦截**:`.env` / `*.pem` 等凭证文件整文件剔除;内容含密钥的文件就地脱敏后再提交。
-7. **提示注入加固**:Issue 正文等不可信输入被 `<untrusted-content>` 边界包裹,并附安全红线。
+4. **队长的否决权**:队长可裁决 `reject` / `need_clarification` —— **一个队员都不派**,
+   只在 Issue 上说明理由或提出待澄清问题。
+5. **幂等短路**:任务内容与上次运行逐字节一致时直接跳过,不重复派员。
+6. **角色即权限**:`reviewer` 类角色用只读 agent 且无写权限,只出结论不改代码。
+
+**密钥侧**
+
+7. **环境隔离**:`GITHUB_TOKEN` 等平台凭证不会传进模型进程,成员 agent 拿不到。
+8. **统一脱敏**:日志、PR 标题/正文/评论、成员总结全部过脱敏器(GitHub **不掩码** PR 正文)。
+9. **产出物拦截**:`.env` / `*.pem` 等凭证文件整文件剔除;内容含密钥的文件就地脱敏后再提交。
+10. **提示注入加固**:Issue 正文等不可信输入被 `<untrusted-content>` 边界包裹,并附安全红线。
 
 完整威胁模型、接入清单与残留风险见 **[docs/security.md](docs/security.md)**。
+CLI 的完整用法见 **[docs/cli.md](docs/cli.md)**。
 
 ## 运行时要求
 

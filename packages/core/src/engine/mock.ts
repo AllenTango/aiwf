@@ -19,7 +19,6 @@ import type {
 } from '../contracts/index.js';
 
 const KEYWORD_RE = /\b(FAIL|PARTIAL|CONFLICT)\b/g;
-const TASK_ID_RE = /\bt([123])\b/i;
 
 interface KeywordBinding {
   fail: Set<string>;
