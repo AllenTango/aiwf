@@ -65,8 +65,11 @@ jobs:
         with:
           # issue 与 issue_comment 两类事件都可取到 issue number。
           task_ref: ${{ github.repository }}#${{ github.event.issue.number }}
-          # engine/model/base_branch/branch_prefix/max_parallel/dry_run 均可按仓库定制,
-          # 见 docs/action.md "定制" 一节。
+          # ── 首次冒烟配置:mock 引擎 + dry_run,零凭证即可验证全链路(仅出计划)。
+          # 配置好模型凭证(见 docs/action.md)后,改为 engine: opencode 并删掉 dry_run 行。
+          engine: mock
+          dry_run: true
+          # engine/base_branch/branch_prefix/max_parallel 等其余输入见 docs/action.md "定制" 一节。
         env:
           # 模型来自仓库 Variable(未配置时留空,engine 使用默认模型)。
           AIWF_MODEL: ${{ vars.AIWF_MODEL }}
