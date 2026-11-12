@@ -6,8 +6,8 @@
 #   - issue_comment(created):评论文本中包含 "@aiwf" 时开工,如 "@aiwf revise: 补充错误处理示例"。
 #
 # 权限说明:contents 写(建分支/推送)、issues 写(读 Issue/写评论)、pull-requests 写(建/改 PR)。
-# 模型配置:仓库 Variables → Actions,键为 AIWF_MODEL(如 "opencode/glm-5.3-free"),可选;
-# 若仓库 Variable 未配置,engine 会使用其默认模型。
+# 模型配置:仓库 Variables → Actions,键为 AIWF_MODEL(如 "minimax/MiniMax-M3.1-Flash"),可选;
+# 若仓库 Variable 未配置,engine 会使用其默认模型。凭证 Secret 见下方 env 注释。
 name: aiwf
 
 on:
@@ -65,16 +65,22 @@ jobs:
         with:
           # issue 与 issue_comment 两类事件都可取到 issue number。
           task_ref: ${{ github.repository }}#${{ github.event.issue.number }}
-          # ── 首次冒烟配置:mock 引擎 + dry_run,零凭证即可验证全链路(仅出计划)。
-          # 配置好模型凭证(见 docs/action.md)后,改为 engine: opencode 并删掉 dry_run 行。
-          engine: mock
-          dry_run: true
-          # engine/base_branch/branch_prefix/max_parallel 等其余输入见 docs/action.md "定制" 一节。
+          # 真实引擎:opencode(供应商/模型由 AIWF_MODEL 指定,凭证见下方 env)。
+          engine: opencode
+          # engine/base_branch/branch_prefix/max_parallel/dry_run 等其余输入见 docs/action.md "定制" 一节。
         env:
           # 模型来自仓库 Variable(未配置时留空,engine 使用默认模型)。
           AIWF_MODEL: ${{ vars.AIWF_MODEL }}
-          # 模型凭证:opencode 网关(opencode/glm-5.3-free 等)用 OPENCODE_API_KEY。
-          # 仓库 Settings → Secrets and variables → Actions → Secrets 新建 OPENCODE_API_KEY。
+          # 模型凭证:按所选供应商设置对应 Secret(未设置的会注入为空,opencode 视为该供应商未配置)。
+          #   MiniMax  → MINIMAX_API_KEY   (AIWF_MODEL 如 minimax/MiniMax-M3.1-Flash)
+          #   z.ai     → ZAI_API_KEY       (AIWF_MODEL 如 zai/glm-5.3)
+          #   智谱     → ZHIPU_API_KEY     (AIWF_MODEL 如 zhipuai/glm-5.3)
+          #   DeepSeek → DEEPSEEK_API_KEY  (AIWF_MODEL 如 deepseek/deepseek-chat)
+          #   opencode 网关(OpenCode Go)→ OPENCODE_API_KEY
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # token 必须显式注入(不会隐式透传给 action)。
           GITHUB_TOKEN: ${{ github.token }}
