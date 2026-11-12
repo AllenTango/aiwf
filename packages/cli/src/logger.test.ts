@@ -22,6 +22,37 @@ describe('console logger mapping', () => {
     expect(seen.some((s) => s.via === 'error' && s.text.includes('[error]') && s.text.includes('e1'))).toBe(true);
   });
 
+  it('redacts secret plaintext on every level when a redactor is provided', () => {
+    const seen: string[] = [];
+    const consoleLike = {
+      log: (msg?: unknown): void => void seen.push(String(msg)),
+      warn: (msg?: unknown): void => void seen.push(String(msg)),
+      error: (msg?: unknown): void => void seen.push(String(msg)),
+    };
+    const secret = 'sk-abcdef0123456789abcdef';
+    const logger = makeConsoleLogger(consoleLike, (text) =>
+      text.split(secret).join('***REDACTED***'),
+    );
+    logger.debug(`debug ${secret}`);
+    logger.info(`info ${secret}`);
+    logger.warn(`warn ${secret}`);
+    logger.error(`error ${secret}`);
+
+    expect(seen).toHaveLength(4);
+    expect(seen.every((text) => !text.includes(secret))).toBe(true);
+    expect(seen.every((text) => text.includes('***REDACTED***'))).toBe(true);
+  });
+
+  it('without a redactor the output is untouched (backward compatible)', () => {
+    const seen: string[] = [];
+    const logger = makeConsoleLogger({
+      log: (msg?: unknown): void => void seen.push(String(msg)),
+    });
+    const secret = 'sk-abcdef0123456789abcdef';
+    logger.info(`info ${secret}`);
+    expect(seen[0]).toBe(`info ${secret}`);
+  });
+
   it('warn/error fall back to console.log when dedicated channels missing', () => {
     const seen: string[] = [];
     const logger = makeConsoleLogger({ log: (msg?: unknown) => void seen.push(String(msg)) });

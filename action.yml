@@ -1,9 +1,21 @@
 # AI Dev Workflow — Issue 输入 · 队长规划 · 并行队员 · 队长合成 · 结项 PR。
 # OWNER: M4.
 #
+# 运行时迁移(GitHub 官方 changelog):
+#   - 2026-06-16 起,runner 默认以 Node24 执行 JavaScript Action;
+#   - 2026-09-16 起,Node20 从 runner 中彻底移除。
+#   因此本 Action 的 runs.using 必须是 node24,配套的 esbuild bundle target 也为 node24。
+#
 # 入口为 esbuild 产物 packages/action/dist/index.js(CJS bundle)。
-# 发布 Marketplace / 从 `@main` 引用时,该 dist 必须随仓库提交:
-# 根 .gitignore 当前全局忽略 dist/,需要反排除(见 docs/action.md 打包段落)。
+# 发布 Marketplace / 从 `@v1` 引用时,该 dist 必须随仓库提交 —— **已完成**:
+#   根 .gitignore 已含反排除规则 `!packages/action/dist/` 与 `!packages/action/dist/**`,
+#   且 packages/action/dist/index.js 已被 git 跟踪,无需再做任何处理。
+#
+# 凭证安全边界:
+#   - 凭证只能来自仓库 Secrets(Settings → Secrets and variables → Actions),
+#     本 Action 自身不携带、不打包、不落盘任何密钥;
+#   - 禁止用 `pull_request_target` 触发本 Action —— 它会把仓库 Secrets 暴露给 fork 的 PR,
+#     本 Action 的工作流只应监听 `issues` / `issue_comment`。
 name: 'AI Dev Workflow'
 description: 'Runs an AI-native dev team: captain plans, parallel members implement, captain synthesizes a PR.'
 author: 'aiwf'
@@ -23,7 +35,12 @@ inputs:
     required: false
     default: 'opencode'
   model:
-    description: 'Model id handed to the engine, e.g. "opencode/glm-5.3-free". Empty → falls back to env AIWF_MODEL.'
+    description: >-
+      Model id handed to the engine, e.g. "opencode/glm-5.3-free".
+      Any opencode-supported `provider/model` is accepted, for example
+      `minimax/MiniMax-M3.1-Flash`, `zai/glm-5.3`, `zhipuai/glm-5.3`,
+      `deepseek/deepseek-chat`, `opencode/glm-5.3-free`.
+      Empty → falls back to env AIWF_MODEL.
     required: false
     default: ''
   base_branch:
@@ -42,6 +59,68 @@ inputs:
     description: 'Plan only: skip member execution and PR delivery (true/false).'
     required: false
     default: 'false'
+  trigger_policy:
+    description: >-
+      Trigger admission policy. `trusted` = only repository OWNER/MEMBER/COLLABORATOR
+      or actors matching `allowed_actors` may trigger the action; `anyone` = no restriction
+      (not recommended: anyone can consume model quota).
+    required: false
+    default: 'trusted'
+  allowed_actors:
+    description: >-
+      Comma-separated GitHub username whitelist; a match is admitted (case-insensitive).
+    required: false
+    default: ''
+  daily_run_limit:
+    description: >-
+      Maximum number of runs per day for this repository. 0 means unlimited; exceeding it
+      rejects the current run and raises an alert.
+    required: false
+    default: '0'
+  max_tasks:
+    description: >-
+      Maximum number of member tasks allowed in a single run (valid range 1~10).
+    required: false
+    default: '6'
+  timeout_ms:
+    description: >-
+      Engine per-step timeout in milliseconds (valid range 60000~3600000).
+    required: false
+    default: '1200000'
+  models:
+    description: >-
+      Model pool the captain may assign, as `role=provider/model` entries separated by
+      commas or newlines, e.g. "worker=opencode/glm-5.3, reviewer=minimax/MiniMax-M3.1-Flash".
+      The role `default` is used when a task names no model. Empty = use the default model.
+    required: false
+    default: ''
+  guidelines:
+    description: >-
+      Extra behaviour guidelines for every member, one per line (e.g. "run pnpm test before
+      finishing"). They are layered on top of the built-in defaults and the captain's
+      per-task guidelines.
+    required: false
+    default: ''
+  budget:
+    description: >-
+      Relative cost budget for one run, in weight units (low=1, medium=3, high=8).
+      0 means unlimited. When the captain's plan exceeds it, the lowest-value tasks are
+      dropped (dependency-safe).
+    required: false
+    default: '0'
+  approve:
+    description: >-
+      Two-stage approval. When true, the captain only publishes a decision package (plan,
+      crew, cost) on the issue and dispatches no member; reply "@aiwf go" to execute it.
+      When false, a trigger runs the team directly.
+    required: false
+    default: 'false'
+  idempotent:
+    description: >-
+      Skip the run when the task content is byte-identical to the previous run on the same
+      issue (no model call, no member dispatched). Set to false to force a re-run.
+    required: false
+    default: 'true'
 
 outputs:
   pr-url:
@@ -52,5 +131,5 @@ outputs:
     description: 'Captain closing summary.'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'packages/action/dist/index.js'

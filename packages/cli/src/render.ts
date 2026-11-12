@@ -1,5 +1,12 @@
 import pc from 'picocolors';
-import type { PipelineEvent, PipelineStage, RunResult, TaskResult, WorkflowPlan } from '@aiwf/core';
+import type {
+  PipelineEvent,
+  PipelineStage,
+  Redactor,
+  RunResult,
+  TaskResult,
+  WorkflowPlan,
+} from '@aiwf/core';
 import type { LogLevel } from '@aiwf/core';
 
 // ---------------------------------------------------------------------------
@@ -20,6 +27,15 @@ export interface Palette {
 }
 
 const identity: ColorFn = (text) => text;
+
+/** 缺省脱敏器:恒等(向后兼容:不传 redact 时输出与历史完全一致)。 */
+const identityRedactor: Redactor = (text) => text;
+
+/** 对一组渲染行逐行脱敏(可选)。 */
+function redactLines(lines: string[], redact?: Redactor): string[] {
+  if (typeof redact !== 'function') return lines;
+  return lines.map((line) => redact(line));
+}
 
 export const plainPalette: Palette = {
   bold: identity,
@@ -85,7 +101,11 @@ export function depthOfTask(plan: WorkflowPlan, taskId: string): number {
   return resolve(taskId, new Set());
 }
 
-export function renderPlan(plan: WorkflowPlan, p: Palette = pc): string[] {
+export function renderPlan(
+  plan: WorkflowPlan,
+  p: Palette = pc,
+  redact: Redactor = identityRedactor,
+): string[] {
   const lines: string[] = [];
   lines.push(p.bold(p.magenta('▶ 队长计划')));
   lines.push(p.dim(`  ${plan.summary}`));
@@ -104,7 +124,7 @@ export function renderPlan(plan: WorkflowPlan, p: Palette = pc): string[] {
     lines.push(p.yellow('⚠ 队长风险提示'));
     for (const risk of plan.risks) lines.push(p.yellow(`  - ${risk}`));
   }
-  return lines;
+  return redactLines(lines, redact);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,43 +140,52 @@ export function taskMark(
   return p.red('✘');
 }
 
-export function renderTaskResult(result: TaskResult, p: Palette = pc): string {
+export function renderTaskResult(
+  result: TaskResult,
+  p: Palette = pc,
+  redact: Redactor = identityRedactor,
+): string {
   const head = `${taskMark(result.status, p)} ${p.bold(result.taskId)} — ${result.summary}`;
   if (result.status === 'failed' && result.error) {
-    return `${head}  ${p.red(`↳ error: ${result.error}`)}`;
+    return redact(`${head}  ${p.red(`↳ error: ${result.error}`)}`);
   }
-  return head;
+  return redact(head);
 }
 
 export function renderLogLine(
   level: LogLevel,
   message: string,
   p: Palette = pc,
+  redact: Redactor = identityRedactor,
 ): string {
-  if (level === 'error') return p.red(`[error] ${message}`);
-  if (level === 'warn') return p.yellow(`[warn] ${message}`);
-  if (level === 'debug') return p.gray(`[debug] ${message}`);
-  return message;
+  if (level === 'error') return p.red(`[error] ${redact(message)}`);
+  if (level === 'warn') return p.yellow(`[warn] ${redact(message)}`);
+  if (level === 'debug') return p.gray(`[debug] ${redact(message)}`);
+  return redact(message);
 }
 
 // ---------------------------------------------------------------------------
 // Event-driven renderer: every PipelineEvent maps to console lines.
 // ---------------------------------------------------------------------------
 
-export function renderEvent(event: PipelineEvent, p: Palette = pc): string[] {
+export function renderEvent(
+  event: PipelineEvent,
+  p: Palette = pc,
+  redact: Redactor = identityRedactor,
+): string[] {
   switch (event.type) {
     case 'stage':
       return [renderStageBanner(event.stage, p)];
     case 'plan':
-      return renderPlan(event.plan, p);
+      return renderPlan(event.plan, p, redact);
     case 'task-dispatch':
       return [
         `${p.cyan('→')} ${p.bold(`分派 ${event.taskId}`)} ${p.dim(`→ 分支 ${event.branch}`)}`,
       ];
     case 'task-result':
-      return [renderTaskResult(event.result, p)];
+      return [renderTaskResult(event.result, p, redact)];
     case 'log':
-      return [renderLogLine(event.level, event.message, p)];
+      return [renderLogLine(event.level, event.message, p, redact)];
     case 'deliver': {
       const pr = event.deliverable.pullRequest;
       const prText =
@@ -188,6 +217,7 @@ export function renderFinalReport(
   run: RunResult,
   opts: { notes?: readonly string[] } = {},
   p: Palette = pc,
+  redact: Redactor = identityRedactor,
 ): string {
   const deliverable = run.deliverable;
   const status = summarizeStatus(deliverable.taskResults);
@@ -214,7 +244,7 @@ export function renderFinalReport(
     inner.push(p.gray('  (无 — dry-run 或计划为空)'));
   }
   for (const result of deliverable.taskResults) {
-    inner.push(`  ${renderTaskResult(result, p)}`);
+    inner.push(`  ${renderTaskResult(result, p, redact)}`);
   }
 
   if (opts.notes && opts.notes.length > 0) {
@@ -229,10 +259,12 @@ export function renderFinalReport(
     for (const risk of deliverable.plan.risks) inner.push(p.yellow(`  - ${risk}`));
   }
 
-  const width = Math.max(48, ...inner.map((l) => stripAnsi(l).length + 4));
+  // 脱敏在计算框宽之前逐行执行:占位符长度可能与原文不同,需按脱敏后的文本量宽。
+  const scrubbed = redactLines(inner, redact);
+  const width = Math.max(48, ...scrubbed.map((l) => stripAnsi(l).length + 4));
   const top = `┌─ 结项报告 ${'─'.repeat(Math.max(2, width - '┌─ 结项报告 '.length - 1))}`;
   const bottom = `└${'─'.repeat(Math.max(2, width - 1))}`;
-  const body = inner.map((l) => `│ ${l}`).join('\n');
+  const body = scrubbed.map((l) => `│ ${l}`).join('\n');
   return [top, body, bottom].join('\n');
 }
 

@@ -30,6 +30,9 @@ const RUN_EXAMPLES = `示例:
   # 4) 脚本化:结束后输出机器可读的 RunResult JSON
   $ aiwf run --inline "规范 package.json scripts" --engine mock --json
 
+  # 5) 限额运行:最多 3 个成员任务(也可用环境变量 $AIWF_MAX_TASKS)
+  $ AIWF_MAX_TASKS=3 aiwf run --from task.json --engine mock --max-tasks 3
+
 提示:--issue(owner/repo#12)仅 GitHub Action 支持;本地请改用 --from 或 --inline。`;
 
 export function buildProgram(): Command {
@@ -54,11 +57,18 @@ export function buildProgram(): Command {
     .option('--dir <path>', '目标 git 仓库(默认 process.cwd();必须通过 git rev-parse 校验)')
     .option('--engine <opencode|mock>', '引擎类型(默认 $AIWF_ENGINE ?? opencode)')
     .option('--model <provider/model>', '模型,透传给 EngineConfig(默认 $AIWF_MODEL)')
-    .option('--max-parallel <n>', '并行队员上限(默认 4;$AIWF_MAX_PARALLEL)')
+    .option('--max-parallel <n>', '并行队员上限(1~8,默认 4;$AIWF_MAX_PARALLEL)')
+    .option('--max-tasks <n>', '单次运行允许的最大成员任务数(1~10,默认 6;$AIWF_MAX_TASKS)')
     .option('--base-branch <name>', 'PR 基线分支提示(默认当前分支;$AIWF_BASE_BRANCH)')
     .option('--branch-prefix <p>', '任务分支前缀(默认 aiwf/;$AIWF_BRANCH_PREFIX)')
     .option('--dry-run', '只输出队长计划,不执行成员、不交付', false)
-    .option('--timeout-ms <n>', '引擎单步超时毫秒(opencode 默认 1200000;$AIWF_TIMEOUT_MS)')
+    .option('--timeout-ms <n>', '引擎单步超时毫秒(60000~3600000,默认 1200000;$AIWF_TIMEOUT_MS)')
+    .option(
+      '--models <role=model,...>',
+      '模型池:队长可为不同队员指派不同模型(如 worker=opencode/glm-5.3;$AIWF_MODELS)',
+    )
+    .option('--guidelines <text>', '行为准则:每行一条,叠加在内置默认准则之后($AIWF_GUIDELINES)')
+    .option('--budget <n>', '相对成本预算上限(low=1/medium=3/high=8 单位;0=不限;$AIWF_BUDGET)')
     .option('--json', '结束后输出 RunResult JSON(脚本化)', false)
     .addHelpText('after', RUN_EXAMPLES)
     .action(async (options: RunFlagValues) => {

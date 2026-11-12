@@ -23,6 +23,10 @@ export interface BuildRepoContextOptions {
   keyFilesBudgetTokens?: number;
   /** 单个 keyFile 最多读取的行数,默认 120(超出则截断并标注)。 */
   keyFileMaxLines?: number;
+  /** 需求关键词:命中的相关文件会被优先纳入 keyFiles(见 extractKeywords)。 */
+  keywords?: readonly string[];
+  /** 最近提交条数上限,默认 20;0 = 不取。 */
+  recentCommits?: number;
 }
 
 /** keyFiles 候选(按序;通配符只作用于单个路径段)。 */
@@ -48,8 +52,70 @@ const KEY_FILES_SCAN_DEPTH = 5;
 
 const KEY_FILE_MAX_BYTES = 1024 * 1024; // 单个 keyFile 最多读 1MiB
 
-function defaultOptions(): Required<BuildRepoContextOptions> {
-  return { maxDepth: 3, maxEntries: 200, keyFilesBudgetTokens: 4000, keyFileMaxLines: 120 };
+function defaultOptions(): Required<Omit<BuildRepoContextOptions, 'keywords'>> & { keywords: readonly string[] } {
+  return {
+    maxDepth: 3,
+    maxEntries: 200,
+    keyFilesBudgetTokens: 4000,
+    keyFileMaxLines: 120,
+    keywords: [],
+    recentCommits: 20,
+  };
+}
+
+/** 英文停用词(不作为检索关键词)。 */
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'has', 'are', 'was', 'were',
+  'not', 'but', 'you', 'your', 'can', 'will', 'should', 'would', 'could', 'into', 'than',
+  'then', 'them', 'they', 'when', 'what', 'which', 'while', 'here', 'there', 'been', 'being',
+  'does', 'did', 'doing', 'done', 'just', 'like', 'make', 'made', 'need', 'want', 'use',
+  'used', 'using', 'add', 'added', 'new', 'old', 'all', 'any', 'each', 'more', 'most', 'some',
+  'such', 'only', 'other', 'same', 'very', 'via', 'per', 'out', 'off', 'own', 'too', 'get',
+]);
+
+/**
+ * 从需求文本里抽取**用于路径检索**的关键词(纯函数)。
+ *
+ * 抽取四类 token,按信号强度排序:
+ * 1. 形如 `a/b/c` 的路径片段(取每一段)—— 命中最准;
+ * 2. 标识符([A-Za-z_][A-Za-z0-9_]{3,},含驼峰)—— 能定位到具体实现文件;
+ * 3. 英文单词(≥4 字母,去停用词);
+ * 4. 连续中文片段(≥2 字)—— 兼容中文文件名。
+ *
+ * 目的:让队长能看到「需求相关的代码长什么样」,而不只是仓库目录树。
+ */
+export function extractKeywords(text: string, limit = 24): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string, isPathSegment = false): void => {
+    const token = raw.trim().toLowerCase();
+    if (token.length < 2) return;
+    // 纯字母 token 走停用词过滤(标识符规则会捞到 'this'/'with' 这类常见词)。
+    if (!isPathSegment && /^[a-z]+$/.test(token) && STOP_WORDS.has(token)) return;
+    if (seen.has(token)) return;
+    seen.add(token);
+    out.push(token);
+  };
+
+  // 1) 路径片段
+  for (const m of (text ?? '').matchAll(/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+/g)) {
+    for (const seg of m[0].split('/')) push(seg, true);
+  }
+  // 2) 标识符(含驼峰)
+  for (const m of (text ?? '').matchAll(/[A-Za-z_][A-Za-z0-9_]{3,}/g)) push(m[0]);
+  // 3) 英文单词
+  for (const m of (text ?? '').matchAll(/[A-Za-z]{4,}/g)) push(m[0]);
+  // 4) 中文片段:短串整体保留;长串切 4 字滑窗(兼顾中文文件名与长句)
+  for (const m of (text ?? '').matchAll(/[一-龥]{2,}/g)) {
+    const run = m[0];
+    if (run.length <= 8) {
+      push(run);
+      continue;
+    }
+    for (let i = 0; i + 4 <= run.length && i < 24; i++) push(run.slice(i, i + 4));
+  }
+
+  return out.slice(0, limit);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,35 +288,68 @@ async function readKeyFile(absPath: string, maxLines: number): Promise<{ content
   }
 }
 
-async function buildKeyFiles(rootDir: string, opts: Required<BuildRepoContextOptions>): Promise<{ snippets: FileSnippet[]; notes: string[] }> {
+async function buildKeyFiles(rootDir: string, opts: Required<Omit<BuildRepoContextOptions, 'keywords'>> & { keywords: readonly string[] }): Promise<{ snippets: FileSnippet[]; notes: string[] }> {
   const relPaths = await collectRelPaths(rootDir, KEY_FILES_SCAN_DEPTH);
   const snippets: FileSnippet[] = [];
   const notes: string[] = [];
   const dropped: string[] = [];
   let used = 0;
+  const taken = new Set<string>();
+
+  const pushSnippet = async (rel: string, why: string): Promise<void> => {
+    if (taken.has(rel)) return;
+    const read = await readKeyFile(path.join(rootDir, ...rel.split('/')), opts.keyFileMaxLines);
+    if (!read) {
+      notes.push(`keyFiles 跳过(缺失/读取失败或二进制): ${rel}`);
+      return;
+    }
+    const tokens = Math.max(1, Math.round(read.content.length / 4));
+    if (used + tokens > opts.keyFilesBudgetTokens) {
+      dropped.push(`${rel}(${tokens} tokens)`);
+      return;
+    }
+    used += tokens;
+    taken.add(rel);
+    snippets.push({ path: rel, content: read.content, tokens });
+    if (why !== '') notes.push(`keyFiles 纳入(${why}): ${rel}`);
+  };
 
   for (const pattern of KEY_FILE_CANDIDATES) {
     const matches = relPaths.filter((rel) => matchPattern(pattern, rel)).sort();
     for (const rel of matches) {
-      const read = await readKeyFile(path.join(rootDir, ...rel.split('/')), opts.keyFileMaxLines);
-      if (!read) {
-        notes.push(`keyFiles 跳过(缺失/读取失败或二进制): ${rel}`);
-        continue;
-      }
-      const tokens = Math.max(1, Math.round(read.content.length / 4));
-      if (used + tokens > opts.keyFilesBudgetTokens) {
-        dropped.push(`${rel}(${tokens} tokens)`);
-        continue;
-      }
-      used += tokens;
-      snippets.push({ path: rel, content: read.content, tokens });
+      await pushSnippet(rel, '');
     }
   }
+
+  // 需求相关文件:按关键词命中数排序,追加在固定候选之后(仍受 token 预算约束)。
+  const keywords = opts.keywords.map((k) => k.toLowerCase()).filter((k) => k.length >= 2);
+  if (keywords.length > 0) {
+    const scored = relPaths
+      .filter((rel) => !taken.has(rel))
+      .map((rel) => {
+        const lower = rel.toLowerCase();
+        let hits = 0;
+        for (const kw of keywords) {
+          if (lower.includes(kw)) hits += 1;
+        }
+        return { rel, hits };
+      })
+      .filter((x) => x.hits > 0)
+      .sort((a, b) => (b.hits - a.hits) || a.rel.localeCompare(b.rel))
+      .slice(0, KEY_FILES_BY_KEYWORD_LIMIT);
+    for (const { rel, hits } of scored) {
+      await pushSnippet(rel, `命中需求关键词 ${hits} 个`);
+    }
+  }
+
   if (dropped.length) {
     notes.push(`keyFiles 超出 token 预算(~${opts.keyFilesBudgetTokens})按序丢弃: ${dropped.join('; ')}`);
   }
   return { snippets, notes };
 }
+
+/** 按关键词纳入的相关文件条数上限。 */
+const KEY_FILES_BY_KEYWORD_LIMIT = 8;
 
 // ---------------------------------------------------------------------------
 // 主入口
@@ -275,17 +374,49 @@ export async function buildRepoContext(rootDir: string, options: BuildRepoContex
   const git = new NodeGitOps();
   const branch = await git.currentBranch(rootDir);
 
-  const [walk, keySet] = await Promise.all([
+  const [walk, keySet, commits] = await Promise.all([
     walkTree(rootDir, maxDepth, maxEntries),
     buildKeyFiles(rootDir, opts),
+    readRecentCommits(rootDir, opts.recentCommits),
   ]);
 
   const notes: string[] = [...keySet.notes];
   if (walk.truncated) notes.push(`文件树在 ${maxEntries} 个条目处截断(达到上限)`);
+  if (commits.length === 0 && opts.recentCommits > 0) {
+    notes.push('未能读取最近提交历史(浅克隆/空仓库时正常)');
+  }
 
   const head = `# repo 文件树(root=${path.basename(path.resolve(rootDir))};depth≤${maxDepth},entries≤${maxEntries})`;
   const parts = [head, walk.lines.join('\n'), ...notes.map((n) => `# ${n}`)];
   const treePreview = parts.filter((p) => p !== '').join('\n');
 
-  return { rootDir, branch, treePreview, keyFiles: keySet.snippets };
+  return {
+    rootDir,
+    branch,
+    treePreview,
+    keyFiles: keySet.snippets,
+    ...(commits.length > 0 ? { recentCommits: commits } : {}),
+  };
+}
+
+/**
+ * 读取最近提交摘要(`git log --oneline -N`)。
+ *
+ * 失败(浅克隆 / 空仓库 / 非 git 目录)一律安静返回空数组 —— 快照是增强项,
+ * 不能因为拿不到历史就让整次运行失败。
+ */
+async function readRecentCommits(rootDir: string, limit: number): Promise<string[]> {
+  if (!Number.isFinite(limit) || limit <= 0) return [];
+  const git = new NodeGitOps();
+  try {
+    const r = await git.runGit(rootDir, ['log', '--oneline', '--no-color', `-${Math.floor(limit)}`]);
+    if (r.code !== 0) return [];
+    return r.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+      .slice(0, Math.floor(limit));
+  } catch {
+    return [];
+  }
 }

@@ -6,7 +6,7 @@
   "description": "GitHub Action + CLI that runs an AI-native dev team: captain plans, parallel members implement, captain synthesizes the PR.",
   "packageManager": "pnpm@10.28.2",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "postinstall": "pnpm --filter @aiwf/core build",

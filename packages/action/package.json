@@ -4,7 +4,7 @@
   "private": true,
   "description": "GitHub Action shell: reads issue → runs the AI dev workflow team → opens the PR.",
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --alias:@aiwf/core=../core/src/index.ts --outfile=dist/index.js",
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node24 --charset=utf8 --format=cjs --alias:@aiwf/core=../core/src/index.ts --outfile=dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

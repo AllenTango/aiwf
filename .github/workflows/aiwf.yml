@@ -2,17 +2,26 @@
 # OWNER: M4.
 #
 # 触发:
-#   - issues(opened / edited):新建或编辑 Issue 即自动开工;
+#   - issues(opened):新建 Issue 即自动开工;
 #   - issue_comment(created):评论文本中包含 "@aiwf" 时开工,如 "@aiwf revise: 补充错误处理示例"。
 #
 # 权限说明:contents 写(建分支/推送)、issues 写(读 Issue/写评论)、pull-requests 写(建/改 PR)。
 # 模型配置:仓库 Variables → Actions,键为 AIWF_MODEL(如 "minimax/MiniMax-M3.1-Flash"),可选;
 # 若仓库 Variable 未配置,engine 会使用其默认模型。凭证 Secret 见下方 env 注释。
+#
+# 安全边界:
+#   - 本 workflow 只监听 `issues` / `issue_comment`,**绝不能**改成 `pull_request_target`
+#     —— 那会让 fork 的 PR 拿到仓库 Secrets(凭证只应来自仓库 Secrets,Action 不携带任何密钥)。
+#   - 「谁可以触发」由 action 的 `trigger_policy` 输入控制(trusted = 仅 OWNER/MEMBER/COLLABORATOR
+#     或 `allowed_actors` 白名单命中者),不要用降低 action 准入策略的方式去放宽它。
 name: aiwf
 
 on:
   issues:
-    types: [opened, edited]
+    # 只监听 opened:**编辑 Issue 也会触发一次完整团队运行(1 次队长 + N 次队员模型调用),
+    # 而"改个错别字"这种编辑几乎不需要重跑 —— 这是最典型的额度浪费点。
+    # 需要基于新需求迭代时,用评论触发:`@aiwf revise: ...`(同样只跑一次)。
+    types: [opened]
   issue_comment:
     types: [created]
 
@@ -20,6 +29,9 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  # actions:read 仅用于 daily_run_limit 统计当日运行次数;未授权时配额检查会 fail-open
+  # (放行并告警),不会阻断正常运行。
+  actions: read
 
 concurrency:
   group: aiwf-issue-${{ github.event.issue.number }}
@@ -34,19 +46,19 @@ jobs:
       (contains(github.event.comment.body, '@aiwf') && github.event.comment.user.type != 'Bot')
     steps:
       - name: Check out repo (full history for worktrees/branches)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.28.2
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -60,13 +72,36 @@ jobs:
 
       - name: Run the AI dev workflow team
         # 本地 action:仓库根 action.yml(`./`)。发布到 Marketplace 后可改为
-        # `uses: <owner>/ai-dev-workflow-action@main`。
+        # `uses: AllenTango/aiwf@v1`。
         uses: ./
         with:
           # issue 与 issue_comment 两类事件都可取到 issue number。
           task_ref: ${{ github.repository }}#${{ github.event.issue.number }}
           # 真实引擎:opencode(供应商/模型由 AIWF_MODEL 指定,凭证见下方 env)。
           engine: opencode
+          # ---- 安全与额度护栏(详见 docs/security.md)----
+          # trusted = 仅仓库 OWNER/MEMBER/COLLABORATOR 或白名单命中者可触发,
+          #            防止外部用户开 Issue 刷掉模型额度。
+          trigger_policy: trusted
+          # 白名单(可选,逗号分隔,忽略大小写);trusted 之外的人靠它放行。
+          allowed_actors: ${{ vars.AIWF_ALLOWED_ACTORS }}
+          # 本仓库单日最大运行次数;0 = 不限。仓库 Variable 未配置时兜底为 20,
+          # 即「每天最多 20 次」,避免无人值守时被刷穿额度。
+          # 注意:GitHub 表达式把字符串 '0' 当作假值,所以「不限」请直接把本行改成 '0',
+          # 不要靠 Variable 传 '0'。
+          daily_run_limit: ${{ vars.AIWF_DAILY_RUN_LIMIT || '20' }}
+          # 编制人数上限;队长在此上限内自主决定用几个队员。
+          max_tasks: '6'
+          # 引擎单步超时毫秒(60000~3600000)。
+          timeout_ms: '1200000'
+          # 相对成本预算(low=1/medium=3/high=8 单位);0 = 不限。超预算时按价值裁剪任务。
+          budget: ${{ vars.AIWF_BUDGET || '24' }}
+          # 模型池:队长可为不同队员指派不同模型(留空则全部用 AIWF_MODEL)。
+          models: ${{ vars.AIWF_MODELS }}
+          # 队员行为准则(每行一条,叠加在内置默认准则之后)。
+          guidelines: |
+            提交前必须跑 pnpm build 与 pnpm test,并在总结里写明自检结果。
+            不得修改 packages/core/src/contracts/(队长所有)。
           # engine/base_branch/branch_prefix/max_parallel/dry_run 等其余输入见 docs/action.md "定制" 一节。
         env:
           # 模型来自仓库 Variable(未配置时留空,engine 使用默认模型)。

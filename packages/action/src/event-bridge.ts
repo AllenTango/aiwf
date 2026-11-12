@@ -17,6 +17,7 @@ import type {
   PipelineEvent,
   TaskResult,
   TaskStatus,
+  WorkflowPlan,
 } from '@aiwf/core';
 import { STATUS_EMOJI } from './pr-body.js';
 
@@ -84,6 +85,89 @@ export function setDeliverableOutputs(deliverable: Deliverable): void {
   }
   core.setOutput('branch', deliverable.branch);
   core.setOutput('summary', deliverable.summary);
+}
+
+/**
+ * 对流水线事件里的字符串字段做脱敏(事件类型不变)。
+ *
+ * 背景:core 的 runner 已经会脱敏它发出的文本,但 action 侧仍保留一道防线——
+ * 将来 core 若新增事件或漏改某个字段,这里能兜住「密钥进 PR 正文」的风险
+ * (GitHub 不对 PR 正文做 secret 掩码)。
+ *
+ * 覆盖:
+ *   - plan:summary / tasks[].title / tasks[].instructions / risks
+ *   - task-result:summary / notes / error
+ *   - log:message
+ *   - deliver:deliverable.summary / deliverable.plan / deliverable.taskResults
+ */
+export function redactPipelineEvent(
+  event: PipelineEvent,
+  redact: (text: string) => string,
+): PipelineEvent {
+  switch (event.type) {
+    case 'plan':
+      return {
+        ...event,
+        plan: {
+          ...event.plan,
+          summary: redact(event.plan.summary),
+          risks: event.plan.risks.map((risk) => redact(risk)),
+          tasks: event.plan.tasks.map((task) => ({
+            ...task,
+            title: redact(task.title),
+            instructions: redact(task.instructions),
+          })),
+        },
+      };
+    case 'task-result':
+      return {
+        ...event,
+        result: redactTaskResult(event.result, redact),
+      };
+    case 'log':
+      return { ...event, message: redact(event.message) };
+    case 'deliver':
+      return {
+        ...event,
+        deliverable: {
+          ...event.deliverable,
+          summary: redact(event.deliverable.summary),
+          plan: redactPlan(event.deliverable.plan, redact),
+          taskResults: event.deliverable.taskResults.map((result) => redactTaskResult(result, redact)),
+        },
+      };
+    case 'stage':
+    case 'task-dispatch':
+      return event;
+  }
+}
+
+/** 计划整体脱敏(交付物内嵌的 plan)。 */
+function redactPlan(plan: WorkflowPlan, redact: (text: string) => string): WorkflowPlan {
+  return {
+    ...plan,
+    summary: redact(plan.summary),
+    risks: plan.risks.map((risk) => redact(risk)),
+    tasks: plan.tasks.map((task) => ({
+      ...task,
+      title: redact(task.title),
+      instructions: redact(task.instructions),
+    })),
+  };
+}
+
+/** 成员结果脱敏(交付物内嵌的 taskResults)。 */
+function redactTaskResult(result: TaskResult, redact: (text: string) => string): TaskResult {
+  return {
+    ...result,
+    summary: redact(result.summary),
+    notes: result.notes.map((note) => redact(note)),
+    ...(result.error === undefined ? {} : { error: redact(result.error) }),
+    changedFiles: result.changedFiles.map((file) => ({
+      ...file,
+      ...(file.content === undefined ? {} : { content: redact(file.content) }),
+    })),
+  };
 }
 
 function emitTaskResult(result: TaskResult): void {

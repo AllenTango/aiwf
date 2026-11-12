@@ -167,6 +167,62 @@ describe('event-driven renderer (all contract event kinds)', () => {
   });
 });
 
+describe('可选脱敏(redact 参数,默认恒等)', () => {
+  const SECRET = 'sk-abcdef0123456789abcdef';
+  const scrub = (text: string): string => text.split(SECRET).join('***REDACTED***');
+
+  it('renderEvent 的每一行都过脱敏器', () => {
+    const event: PipelineEvent = {
+      type: 'task-result',
+      result: {
+        taskId: 'T1',
+        status: 'failed',
+        summary: `失败 ${SECRET}`,
+        changedFiles: [],
+        notes: [],
+        error: `boom ${SECRET}`,
+      },
+      at: 0,
+    };
+    const lines = renderEvent(event, P, scrub);
+    const text = lines.join('\n');
+    expect(text).not.toContain(SECRET);
+    expect(text).toContain('***REDACTED***');
+  });
+
+  it('renderPlan / renderLogLine / renderTaskResult 也支持脱敏', () => {
+    const planText = renderPlan(
+      { ...plan, summary: `摘要 ${SECRET}` },
+      P,
+      scrub,
+    ).join('\n');
+    expect(planText).not.toContain(SECRET);
+    expect(planText).toContain('***REDACTED***');
+
+    expect(renderLogLine('info', `msg ${SECRET}`, P, scrub)).not.toContain(SECRET);
+    expect(
+      renderTaskResult(
+        {
+          taskId: 'T1',
+          status: 'completed',
+          summary: `ok ${SECRET}`,
+          changedFiles: [],
+          notes: [],
+        },
+        P,
+        scrub,
+      ),
+    ).not.toContain(SECRET);
+  });
+
+  it('不传 redact 时输出保持恒等(既有快照不受影响)', () => {
+    const identity = (text: string): string => text;
+    expect(renderPlan(plan, P)).toEqual(renderPlan(plan, P, identity));
+    const event: PipelineEvent = { type: 'log', level: 'warn', message: 'careful', at: 0 };
+    expect(renderEvent(event, P)).toEqual([renderLogLine('warn', 'careful', P)]);
+  });
+});
+
 describe('closing report box (结项报告)', () => {
   const base: RunResult = {
     deliverable: {

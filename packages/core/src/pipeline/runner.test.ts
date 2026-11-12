@@ -31,14 +31,26 @@ import { createWorkflowRunner } from './runner.js';
 
 // infra 由 M2 并行开发中:测试通过 mock 隔离,不加载真实实现
 const mockBuildRepoContext = vi.hoisted(() =>
-  vi.fn(async (rootDir: string) => ({
+  vi.fn(async (rootDir: string, _options?: { keywords?: string[] }) => ({
     rootDir,
     branch: 'main',
     treePreview: '(fake tree preview)',
     keyFiles: [],
   })),
 );
-vi.mock('../infra/index.js', () => ({ buildRepoContext: mockBuildRepoContext }));
+vi.mock('../infra/index.js', () => ({
+  buildRepoContext: mockBuildRepoContext,
+  extractKeywords: (text: string) => extractKeywordsImpl(text),
+}));
+
+/** 关键词抽取的测试替身(infra 被 mock,这里只保留行为形状)。 */
+function extractKeywordsImpl(text: string): string[] {
+  const out: string[] = [];
+  for (const m of (text ?? '').matchAll(/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+/g)) {
+    for (const seg of m[0].split('/')) if (seg !== '') out.push(seg.toLowerCase());
+  }
+  return out;
+}
 
 // ------------------------------------------------------------------- fakes
 
@@ -134,6 +146,8 @@ function completedFor(taskId: string, over: Partial<TaskResult> = {}): TaskResul
 
 class FakePlatform implements PlatformClient {
   readonly payloads: PullRequestPayload[] = [];
+  /** 记录 postComment 回帖(裁决回传)。 */
+  readonly comments: { ref: string; body: string }[] = [];
   async fetchTask(ref: string): Promise<TaskInput> {
     void ref;
     throw new Error('pipeline 不应调用 fetchTask');
@@ -141,6 +155,9 @@ class FakePlatform implements PlatformClient {
   async createPullRequest(payload: PullRequestPayload): Promise<PullRequestHandle> {
     this.payloads.push(payload);
     return { number: 7, url: 'https://git.local/pr/7' };
+  }
+  async postComment(ref: string, body: string): Promise<void> {
+    this.comments.push({ ref, body });
   }
 }
 
@@ -203,7 +220,24 @@ interface HarnessParts {
   engine: Engine;
   git: FakeGitOps;
   platform: FakePlatform;
-  extra?: Partial<Pick<WorkflowConfig, 'maxParallel' | 'dryRun' | 'engineConfig' | 'branchPrefix'>>;
+  extra?: Partial<
+    Pick<
+      WorkflowConfig,
+      | 'maxParallel'
+      | 'dryRun'
+      | 'engineConfig'
+      | 'branchPrefix'
+      | 'redact'
+      | 'secretValues'
+      | 'maxTasks'
+      | 'maxDurationMs'
+      | 'budgetUnits'
+      | 'modelPool'
+      | 'guidelines'
+      | 'decisionOnly'
+      | 'presetPlan'
+    >
+  >;
   onEvent?: (event: PipelineEvent) => void;
 }
 
@@ -224,6 +258,15 @@ function buildHarness(parts: HarnessParts): {
     maxParallel: extra.maxParallel,
     dryRun: extra.dryRun,
     engineConfig: extra.engineConfig,
+    redact: extra.redact,
+    secretValues: extra.secretValues,
+    maxTasks: extra.maxTasks,
+    maxDurationMs: extra.maxDurationMs,
+    budgetUnits: extra.budgetUnits,
+    modelPool: extra.modelPool,
+    guidelines: extra.guidelines,
+    decisionOnly: extra.decisionOnly,
+    presetPlan: extra.presetPlan,
     logger,
     onEvent: (event) => {
       events.push(event);
@@ -258,7 +301,10 @@ describe('runner 五阶段主流程', () => {
     const { config, logLines } = buildHarness({ engine: fe.engine, git, platform });
     const result = await createWorkflowRunner(config).run(TASK);
 
-    expect(mockBuildRepoContext).toHaveBeenCalledWith(tempRoot);
+    expect(mockBuildRepoContext).toHaveBeenCalledWith(tempRoot, expect.anything());
+    // 快照按需求关键词构建(让队长看到与需求相关的文件)
+    const snapshotArgs = mockBuildRepoContext.mock.calls[0] as unknown as [string, { keywords?: string[] }];
+    expect(Array.isArray(snapshotArgs[1]?.keywords)).toBe(true);
     expect(fe.planCalls[0]?.repo.rootDir).toBe(tempRoot);
     expect(fe.planCalls[0]?.repo.branch).toBe('main');
     expect(git.currentBranchCalls).toEqual([tempRoot]);
@@ -550,6 +596,355 @@ describe('dry-run 与规划失败', () => {
       expect(platform.payloads).toEqual([]);
       expect(events.some((e) => e.type === 'log' && e.level === 'error')).toBe(true);
     }
+  });
+});
+
+describe('安全护栏:脱敏 / 凭证剔除 / 规模与时长上限', () => {
+  const SECRET = 'sk-live-abcdefghijklmnop1234567890';
+
+  /** 简单脱敏器:把已知明文替换为占位符。 */
+  const redact = (text: string): string => text.split(SECRET).join('***REDACTED***');
+
+  it('成员 summary/notes/error 中的明文被脱敏后才进入日志与 PR 正文', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: makePlan([planTask('t1')]),
+      execute: async () => ({
+        taskId: 't1',
+        status: 'failed',
+        summary: `失败原因:${SECRET}`,
+        notes: [`备注:${SECRET}`],
+        changedFiles: [],
+        error: `stderr 尾部:${SECRET}`,
+      }),
+    });
+    const platform = new FakePlatform();
+    const { config, logLines, events } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: { redact },
+    });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    const pr = platform.payloads[0];
+    expect(pr?.body).not.toContain(SECRET);
+    expect(pr?.body).toContain('***REDACTED***');
+    expect(pr?.reportComment).not.toContain(SECRET);
+    expect(result.deliverable.summary).not.toContain(SECRET);
+    expect(result.deliverable.taskResults[0]?.summary).not.toContain(SECRET);
+    expect(result.deliverable.taskResults[0]?.error).not.toContain(SECRET);
+    expect(logLines.every((l) => !l.message.includes(SECRET))).toBe(true);
+    const taskResultEvent = events.find((e) => e.type === 'task-result');
+    expect(taskResultEvent?.type === 'task-result' && taskResultEvent.result.summary).not.toContain(SECRET);
+  });
+
+  it('计划摘要里的明文被脱敏后才进入 plan 事件', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({ plan: makePlan([planTask('t1')], `计划:${SECRET}`) });
+    const platform = new FakePlatform();
+    const { config, events } = buildHarness({ engine: fe.engine, git, platform, extra: { redact } });
+    await createWorkflowRunner(config).run(TASK);
+
+    const planEvent = events.find((e) => e.type === 'plan');
+    expect(planEvent?.type === 'plan' && planEvent.plan.summary).not.toContain(SECRET);
+  });
+
+  it('产出文件命中凭证特征 → 内容脱敏后落盘,且成员状态降级为 partial', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: makePlan([planTask('t1')]),
+      execute: async () => ({
+        taskId: 't1',
+        status: 'completed',
+        summary: 'ok',
+        notes: [],
+        changedFiles: [{ path: 'src/config.ts', action: 'add', content: `export const KEY = '${SECRET}';\n` }],
+      }),
+    });
+    const platform = new FakePlatform();
+    const { config } = buildHarness({ engine: fe.engine, git, platform, extra: { redact } });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    const wt = git.branchDirByBranch.get('aiwf/t1');
+    const written = await readFile(path.join(wt ?? '', 'src/config.ts'), 'utf8');
+    expect(written).not.toContain(SECRET);
+    expect(written).toContain('***REDACTED***');
+    const r = result.deliverable.taskResults[0];
+    expect(r?.status).toBe('partial');
+    expect(r?.notes.join('\n')).toContain('脱敏');
+  });
+
+  it('凭证文件(.env)被整文件剔除:不落盘、不进变更清单', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: makePlan([planTask('t1')]),
+      execute: async () => ({
+        taskId: 't1',
+        status: 'completed',
+        summary: 'ok',
+        notes: [],
+        changedFiles: [
+          { path: '.env', action: 'add', content: `API_KEY=${SECRET}\n` },
+          { path: 'src/ok.ts', action: 'add', content: 'export const ok = 1;\n' },
+        ],
+      }),
+    });
+    const platform = new FakePlatform();
+    const { config } = buildHarness({ engine: fe.engine, git, platform, extra: { redact } });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    const wt = git.branchDirByBranch.get('aiwf/t1');
+    await expect(readFile(path.join(wt ?? '', '.env'), 'utf8')).rejects.toThrow();
+    expect(await readFile(path.join(wt ?? '', 'src/ok.ts'), 'utf8')).toBe('export const ok = 1;\n');
+    const paths = result.deliverable.taskResults[0]?.changedFiles.map((f) => f.path) ?? [];
+    expect(paths).not.toContain('.env');
+    expect(paths).toContain('src/ok.ts');
+    expect(result.deliverable.taskResults[0]?.status).toBe('partial');
+  });
+
+  it('maxTasks 生效:计划超限时按价值裁剪(保高价值、砍低价值),被裁掉的任务不进入引擎', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: makePlan([
+        { ...planTask('t1'), weight: 'high' },
+        { ...planTask('t2'), weight: 'low' },
+        { ...planTask('t3'), weight: 'medium' },
+      ]),
+    });
+    const platform = new FakePlatform();
+    const { config, logLines } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: { maxTasks: 2 },
+    });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    // 按价值从高到低装:先装 high(t1),再装 medium(t3) → 砍掉 low(t2)
+    // (同层任务的实际派发顺序取决于 worktree 准备速度,故按集合断言)
+    expect(fe.executeCalls.map((c) => c.task.id).sort()).toEqual(['t1', 't3']);
+    expect(result.deliverable.plan.tasks).toHaveLength(2);
+    expect(result.deliverable.plan.tasks.map((t) => t.id).sort()).toEqual(['t1', 't3']);
+    expect(logLines.some((l) => l.level === 'warn' && l.message.includes('按价值裁剪'))).toBe(true);
+  });
+
+  it('maxDurationMs 生效:超出时间预算后不再派发新成员,剩余任务标记为 skipped', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: makePlan([planTask('t1'), planTask('t2', ['t1'])]),
+      execute: async (ctx) => {
+        if (ctx.task.id === 't1') await sleep(30);
+        return completedFor(ctx.task.id);
+      },
+    });
+    const platform = new FakePlatform();
+    const { config } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: { maxDurationMs: 1 },
+    });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    const byId = new Map(result.deliverable.taskResults.map((r) => [r.taskId, r] as const));
+    expect(fe.executeCalls.map((c) => c.task.id)).toEqual(['t1']);
+    expect(byId.get('t2')?.error).toBe('skipped: exceeded time budget');
+  });
+});
+
+describe('队长的裁决权:分析后决定开不开工', () => {
+  it('verdict=reject → 一个队员都不派、不建 worktree、不建 PR,并把裁决回帖到 Issue', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: {
+        verdict: 'reject',
+        rationale: '该需求与既有实现重复,单开一次开发不划算',
+        summary: '不建议单独开发',
+        tasks: [],
+        risks: [],
+        analysis: { understanding: '导出能力已存在', affectedAreas: ['src/export'], risks: [] },
+        cost: { weight: 'low', expectedCalls: 1, units: 1, reason: '无需队员' },
+      },
+    });
+    const platform = new FakePlatform();
+    const { config, logLines } = buildHarness({ engine: fe.engine, git, platform });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    // 关键断言:零成员调用、零工作树、零 PR
+    expect(fe.executeCalls).toEqual([]);
+    expect(git.ops.some((op) => op.startsWith('ensureWorktree'))).toBe(false);
+    expect(platform.payloads).toEqual([]);
+
+    // 裁决信息可见:summary 含裁决与依据
+    expect(result.deliverable.summary).toContain('队长裁决');
+    expect(result.deliverable.summary).toContain('重复');
+    expect(result.deliverable.pullRequest).toBeUndefined();
+
+    // 裁决回帖到 Issue(人类看得见)
+    expect(platform.comments).toHaveLength(1);
+    expect(platform.comments[0]?.ref).toBe('org/repo#42');
+    expect(platform.comments[0]?.body).toContain('不予开工');
+    expect(logLines.some((l) => l.level === 'warn' && l.message.includes('未派发任何队员'))).toBe(true);
+  });
+
+  it('verdict=need_clarification → 同样不派队员,summary 列出待澄清问题', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: {
+        verdict: 'need_clarification',
+        rationale: '验收标准缺失,无法判断做到什么程度算完成',
+        summary: '需要澄清',
+        clarifications: ['CSV 字段顺序由谁决定?', '是否需要支持 GBK 编码?'],
+        tasks: [],
+        risks: [],
+      },
+    });
+    const platform = new FakePlatform();
+    const { config } = buildHarness({ engine: fe.engine, git, platform });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    expect(fe.executeCalls).toEqual([]);
+    expect(platform.payloads).toEqual([]);
+    expect(result.deliverable.summary).toContain('需要澄清');
+    expect(result.deliverable.summary).toContain('CSV 字段顺序由谁决定');
+    expect(platform.comments[0]?.body).toContain('CSV 字段顺序由谁决定');
+  });
+
+  it('平台不支持回帖时,裁决仍然生效且不抛错', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: { verdict: 'reject', rationale: '不值得', summary: '不做', tasks: [], risks: [] },
+    });
+    // 造一个没有 postComment 的平台
+    const platform: PlatformClient = {
+      async fetchTask(): Promise<TaskInput> {
+        throw new Error('不应调用');
+      },
+      async createPullRequest(): Promise<PullRequestHandle> {
+        throw new Error('不应调用');
+      },
+    };
+    const { config, logLines } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform: platform as unknown as FakePlatform,
+    });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    expect(fe.executeCalls).toEqual([]);
+    expect(result.deliverable.summary).toContain('不做');
+    expect(logLines.some((l) => l.level === 'warn' && l.message.includes('不支持回帖'))).toBe(true);
+  });
+
+  it('预算与模型池被回喂给队长(plan 请求里带 budget)', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({ plan: makePlan([planTask('t1')]) });
+    const platform = new FakePlatform();
+    const { config } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: {
+        maxTasks: 5,
+        maxParallel: 2,
+        maxDurationMs: 900_000,
+        budgetUnits: 12,
+        modelPool: { worker: 'opencode/glm-5.3' },
+      },
+    });
+    await createWorkflowRunner(config).run(TASK);
+
+    const budget = fe.planCalls[0]?.budget;
+    expect(budget?.maxTasks).toBe(5);
+    expect(budget?.maxParallel).toBe(2);
+    expect(budget?.wallClockBudgetMs).toBe(900_000);
+    expect(budget?.budgetUnits).toBe(12);
+    expect(budget?.modelPool?.['worker']).toBe('opencode/glm-5.3');
+  });
+
+  it('队长为不同队员指派不同模型 → 每个成员拿到自己的模型', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({
+      plan: {
+        summary: 's',
+        risks: [],
+        tasks: [
+          { ...planTask('t1'), model: 'worker' },
+          { ...planTask('t2'), model: 'reviewer' },
+        ],
+      },
+    });
+    const platform = new FakePlatform();
+    const { config } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: { modelPool: { worker: 'opencode/glm-5.3', reviewer: 'minimax/MiniMax-M3.1-Flash' } },
+    });
+    await createWorkflowRunner(config).run(TASK);
+
+    const byId = new Map(fe.executeCalls.map((c) => [c.task.id, c.task.model] as const));
+    expect(byId.get('t1')).toBe('opencode/glm-5.3');
+    expect(byId.get('t2')).toBe('minimax/MiniMax-M3.1-Flash');
+  });
+
+  it('人类配置的行为准则进入每个成员的上下文', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({ plan: makePlan([planTask('t1')]) });
+    const platform = new FakePlatform();
+    const { config } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: { guidelines: ['提交前必须跑 pnpm test'] },
+    });
+    await createWorkflowRunner(config).run(TASK);
+
+    expect(fe.executeCalls[0]?.guidelines).toEqual(['提交前必须跑 pnpm test']);
+  });
+});
+
+describe('两段式审批(决策包 → @aiwf go → 执行)', () => {
+  it('decisionOnly → 只出决策包,不派发队员,并回帖到 Issue', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({ plan: makePlan([planTask('t1')]) });
+    const platform = new FakePlatform();
+    const { config, logLines } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: { decisionOnly: true },
+    });
+    const result = await createWorkflowRunner(config).run(TASK);
+
+    expect(fe.executeCalls).toEqual([]);
+    expect(git.ops.some((op) => op.startsWith('ensureWorktree'))).toBe(false);
+    expect(platform.payloads).toEqual([]);
+    expect(result.deliverable.summary).toContain('决策包');
+    expect(result.deliverable.summary).toContain('@aiwf go');
+    expect(platform.comments).toHaveLength(1);
+    expect(platform.comments[0]?.body).toContain('AIWF_DECISION:');
+    expect(logLines.some((l) => l.level === 'warn' && l.message.includes('不派发任何队员'))).toBe(true);
+  });
+
+  it('presetPlan → 跳过队长调用,直接按已批准的决策包派发队员', async () => {
+    const git = new FakeGitOps();
+    const fe = makeEngine({ plan: makePlan([planTask('from-engine')]) });
+    const platform = new FakePlatform();
+    const { config, logLines } = buildHarness({
+      engine: fe.engine,
+      git,
+      platform,
+      extra: {
+        presetPlan: makePlan([planTask('from-decision')]),
+      },
+    });
+    await createWorkflowRunner(config).run(TASK);
+
+    // 队长没有被调用(engine.plan 未被触发):执行的任务来自预置决策包
+    expect(fe.executeCalls.map((c) => c.task.id)).toEqual(['from-decision']);
+    expect(logLines.some((l) => l.message.includes('跳过队长规划调用'))).toBe(true);
   });
 });
 

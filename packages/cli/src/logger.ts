@@ -1,4 +1,4 @@
-import type { Logger } from '@aiwf/core';
+import type { Logger, Redactor } from '@aiwf/core';
 import pc from 'picocolors';
 
 /**
@@ -9,13 +9,22 @@ import pc from 'picocolors';
  * - error → console.error (red, tagged)
  * picocolors auto-disables color when stdout is not a TTY (or NO_COLOR set),
  * so CI logs stay clean.
+ *
+ * `redact` 是可选的脱敏器(来自 @aiwf/core 的 contracts):所有落到终端的
+ * 消息都会先过它,避免 agent 打印的密钥明文进入终端 / CI 日志。
+ * 缺省为恒等函数,保持既有调用方行为不变。
  */
-export function makeConsoleLogger(consoleLike: Partial<Console> = console): Logger {
+export function makeConsoleLogger(
+  consoleLike: Partial<Console> = console,
+  redact?: Redactor,
+): Logger {
+  const scrub = (text: string): string =>
+    typeof redact === 'function' ? redact(text) : text;
   return {
-    debug: (msg) => (consoleLike.log ?? consoleLike.info)?.(pc.gray(`[debug] ${msg}`)),
-    info: (msg) => (consoleLike.log ?? consoleLike.info)?.(msg),
-    warn: (msg) => (consoleLike.warn ?? consoleLike.log)?.(pc.yellow(`[warn] ${msg}`)),
-    error: (msg) => (consoleLike.error ?? consoleLike.log)?.(pc.red(`[error] ${msg}`)),
+    debug: (msg) => (consoleLike.log ?? consoleLike.info)?.(pc.gray(`[debug] ${scrub(msg)}`)),
+    info: (msg) => (consoleLike.log ?? consoleLike.info)?.(scrub(msg)),
+    warn: (msg) => (consoleLike.warn ?? consoleLike.log)?.(pc.yellow(`[warn] ${scrub(msg)}`)),
+    error: (msg) => (consoleLike.error ?? consoleLike.log)?.(pc.red(`[error] ${scrub(msg)}`)),
   };
 }
 

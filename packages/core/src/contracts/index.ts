@@ -49,6 +49,13 @@ export interface RepoContext {
   treePreview: string;
   /** Small set of high-signal files (README, package.json, …). */
   keyFiles: FileSnippet[];
+  /**
+   * 最近提交摘要(`git log --oneline -N`)。
+   *
+   * 用途:让队长判断「这块代码最近是否正在被改」「是否已有同类工作」——
+   * 没有它,队长判断「该调整还是该新做」时几乎是盲的。
+   */
+  recentCommits?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +74,82 @@ export interface PlanTask {
   dependsOn: string[];
   /** Paths/artifacts the member is expected to touch. */
   expectedOutputs: string[];
+  /**
+   * 成本权重:low=改文档/小改动,medium=常规实现,high=重构/跨模块改造。
+   *
+   * 用途:预算超限时按「价值」而不是拓扑序裁剪任务(见 pipeline/plan-economics)。
+   */
+  weight?: TaskWeight;
+  /**
+   * 该任务指派的模型(`provider/model`,或模型池里的角色名)。
+   * 缺省 → 用引擎默认模型。队长据此为不同队员配备不同模型。
+   */
+  model?: string;
+  /**
+   * 队长为**这个任务**追加的行为准则(叠加在内置默认与人类配置之后)。
+   */
+  guidelines?: string[];
+}
+
+/** 队长的裁决:这一轮到底该不该开工。 */
+export type PlanVerdict = 'proceed' | 'reject' | 'need_clarification';
+
+/** 任务/整体的成本权重。 */
+export type TaskWeight = 'low' | 'medium' | 'high';
+
+/** 队长的成本估计(供人审计与预算裁剪参考)。 */
+export interface PlanCost {
+  /** 整体成本量级。 */
+  weight: TaskWeight;
+  /** 预计的模型调用次数(含队长本次)。 */
+  expectedCalls: number;
+  /** 依据(为什么是这个量级)。 */
+  reason: string;
+  /** 相对成本单位合计(权重档位口径;1 次调用 = 1 单位 + 队长本次)。 */
+  units?: number;
+  /** 若人类提供了价格表,这里给绝对金额估算。 */
+  estimatedCost?: number;
+  /** 绝对金额的币种。 */
+  currency?: string;
+  /** 逐任务明细。 */
+  breakdown?: PlanCostItem[];
+}
+
+/** 单个任务的成本明细。 */
+export interface PlanCostItem {
+  taskId: string;
+  /** 该任务指派的模型。 */
+  model?: string;
+  /** 成本权重。 */
+  weight: TaskWeight;
+  /** 相对成本单位。 */
+  units: number;
+}
+
+/** 队长对需求的分析产物(裁决的依据)。 */
+export interface PlanAnalysis {
+  /** 队长对需求的理解(一段话)。 */
+  understanding: string;
+  /** 预计受影响的区域/模块。 */
+  affectedAreas: string[];
+  /** 识别到的风险。 */
+  risks: string[];
+}
+
+/** 本次运行的预算约束——必须让队长看到,否则它无从做成本权衡。 */
+export interface PlanBudget {
+  /** 单次运行允许的最大成员任务数(= 编制人数上限)。 */
+  maxTasks: number;
+  /** 并行队员上限。 */
+  maxParallel: number;
+  /** 单次运行的墙钟预算(ms)。 */
+  wallClockBudgetMs?: number;
+  /** 今日剩余可运行次数(未知则省略)。 */
+  remainingRuns?: number;
+  /** 相对成本预算上限(权重档位单位);队长规划时不得超出。 */
+  budgetUnits?: number;
+  /** 可指派的模型池(role → model);为空表示只能用默认模型。 */
+  modelPool?: Record<string, string>;
 }
 
 /** Captain's structured plan for the whole request. */
@@ -74,6 +157,16 @@ export interface WorkflowPlan {
   summary: string;
   tasks: PlanTask[];
   risks: string[];
+  /** 裁决:缺省 'proceed'(兼容旧计划)。reject/need_clarification 时不派发任何成员。 */
+  verdict?: PlanVerdict;
+  /** 裁决依据:为什么值得做 / 为什么不值得做 / 缺什么信息。 */
+  rationale?: string;
+  /** verdict=need_clarification 时需要人回答的问题。 */
+  clarifications?: string[];
+  /** 成本估计。 */
+  cost?: PlanCost;
+  /** 队长的分析产物(裁决依据)。 */
+  analysis?: PlanAnalysis;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +203,11 @@ export interface MemberContext {
   repo: RepoContext;
   plan: WorkflowPlan;
   task: PlanTask;
+  /**
+   * 人类配置的行为准则(与内置默认准则、队长按任务追加的准则叠加)。
+   * 队员**施工前**必须先读它 —— 这是「开工前的行为准则」的执行载体。
+   */
+  guidelines?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +232,8 @@ export interface PlanRequest {
   repo: RepoContext;
   /** Extra captain hints (e.g. from CLI flags). */
   request?: string;
+  /** 预算约束:队长必须据此做成本权衡(不喂预算,它就无从判断"够不够/省不省")。 */
+  budget?: PlanBudget;
 }
 
 /**
@@ -175,6 +275,13 @@ export interface PlatformClient {
   /** Resolve a task reference like "owner/repo#123" into a TaskInput. */
   fetchTask(ref: string): Promise<TaskInput>;
   createPullRequest(payload: PullRequestPayload): Promise<PullRequestHandle>;
+  /**
+   * 在任务源上留一条评论(可选能力)。
+   *
+   * 用途:队长裁决为 reject / need_clarification 时,把「为什么不开工 / 要澄清什么」
+   * 回到人类眼前 —— 否则裁决只在日志里,人类看不到。CLI 本地平台不实现。
+   */
+  postComment?(ref: string, body: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +346,16 @@ export interface RunResult {
 // Workflow configuration & entry
 // ---------------------------------------------------------------------------
 
+/**
+ * 文本脱敏器:把疑似凭证片段替换为占位符。
+ *
+ * 约定(安全边界):
+ * - 所有「会离开本次运行」的文本(日志、PR 正文、成员总结、提交内容)都必须过脱敏器;
+ * - GitHub 只对日志做 secret 掩码,PR 正文与 git 提交**不会**被掩码,故脱敏不能省;
+ * - 缺省实现为恒等函数,等价于「不脱敏」(仅本地 CLI/测试场景可接受)。
+ */
+export type Redactor = (text: string) => string;
+
 export interface WorkflowConfig {
   engine: Engine;
   platform: PlatformClient;
@@ -255,6 +372,45 @@ export interface WorkflowConfig {
   maxParallel?: number;
   /** Skip member execution and PR delivery; pipeline reports the plan. */
   dryRun?: boolean;
+  /** 文本脱敏器:日志/PR 正文/成员产物统一经此过滤(缺省为恒等)。 */
+  redact?: Redactor;
+  /**
+   * 本次运行中「已知为凭证」的明文值(如环境变量里的 API Key)。
+   *
+   * 用途:在成员产出物落盘前扫描这些明文,命中即脱敏或剔除,避免密钥进入
+   * git 提交与 PR 正文(GitHub 不会对二者做 secret 掩码)。
+   */
+  secretValues?: readonly string[];
+  /** 单次运行允许的最大成员任务数(超出部分按价值裁剪);缺省不限。 */
+  maxTasks?: number;
+  /** 单次运行的最长墙钟预算(ms);超预算后不再派发新成员。缺省不限。 */
+  maxDurationMs?: number;
+  /**
+   * 相对成本预算上限(权重档位单位)。
+   * 队长被告知该预算并自行编制;超预算时运行时按价值裁剪兜底。
+   */
+  budgetUnits?: number;
+  /**
+   * 可指派的模型池(role → model)。
+   * 队长为不同队员指派不同模型;任务里的 `model` 写池中的角色名或完整 model id。
+   */
+  modelPool?: Record<string, string>;
+  /** 人类配置的行为准则(叠加在内置默认准则之后)。 */
+  guidelines?: string[];
+  /**
+   * 预置计划:存在时**跳过队长规划**,直接采用该计划。
+   *
+   * 用途:两段式审批(approve=true)—— 第一轮队长的决策包存到 Issue 评论,
+   * 人批准后第二轮把决策包读回来注入这里,省掉一次队长调用。
+   */
+  presetPlan?: WorkflowPlan;
+  /**
+   * 只出决策包、不派发队员(两段式审批的第一轮)。
+   *
+   * 与 presetPlan 配合:第一轮 decisionOnly=true(只规划并回帖决策包),
+   * 人批准后第二轮 presetPlan=<已批准计划>(执行成员)。
+   */
+  decisionOnly?: boolean;
 }
 
 export interface WorkflowRunner {

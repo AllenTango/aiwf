@@ -9,6 +9,7 @@
  */
 import * as github from '@actions/github';
 import type {
+  IssueComment,
   PlatformClient,
   PullRequestHandle,
   PullRequestPayload,
@@ -139,6 +140,50 @@ export class GitHubPlatformClient implements PlatformClient {
         issueAuthor: issue.user?.login ?? 'unknown',
       },
     };
+  }
+
+  /**
+   * 读取任务源(Issue)的评论列表(按时间正序)。
+   *
+   * 用途:两段式审批 —— 找出队长的决策包评论,以及其后是否出现 `@aiwf go` 批准信号。
+   */
+  async listIssueComments(ref: string): Promise<IssueComment[]> {
+    const parsed = parseTaskRef(ref);
+    if (parsed === null) {
+      throw new Error(`无法解析任务引用以读取评论:"${ref}"(期望形如 \`owner/repo#123\`)。`);
+    }
+    const { owner, repo, number } = parsed;
+    const response = await this.octokit.rest.issues.listComments({
+      owner,
+      repo,
+      issue_number: number,
+      per_page: 100,
+    });
+    return (response.data ?? []).map((comment) => ({
+      author: comment.user?.login ?? 'unknown',
+      body: comment.body ?? '',
+      createdAt: comment.created_at ?? '',
+    }));
+  }
+
+  /**
+   * 在任务源(Issue)上留一条评论。
+   *
+   * 用途:队长裁决为 reject / need_clarification 时,把「为什么不开工 / 要澄清什么」
+   * 送回人类眼前 —— 否则裁决只躺在日志里,人类看不到。
+   */
+  async postComment(ref: string, body: string): Promise<void> {
+    const parsed = parseTaskRef(ref);
+    if (parsed === null) {
+      throw new Error(`无法解析任务引用以回帖:"${ref}"(期望形如 \`owner/repo#123\`)。`);
+    }
+    const { owner, repo, number } = parsed;
+    await this.octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: number,
+      body,
+    });
   }
 
   /** 创建 PR;422(已存在等)→ 复用同 head 的既存 open PR 并更新标题/正文。 */

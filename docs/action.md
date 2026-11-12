@@ -11,6 +11,11 @@
 ```
 
 Action 的入口是仓库根 `action.yml`,运行时为打包产物 `packages/action/dist/index.js`。
+运行时为 **node24**(GitHub 已于 2026-06-16 起默认 Node24,2026-09-16 起移除 Node20)。
+
+> ⚠️ 接入前请先读 [docs/security.md](security.md):本 Action 会调用真实模型,
+> **额度**与**密钥**是首要风险面。那里列出了触发准入、每日配额、规模上限、
+> 密钥隔离、输出脱敏、产出物拦截与提示注入加固七道防线,以及消费方接入清单。
 
 ## 1. 最小接入(五分钟)
 
@@ -21,7 +26,7 @@ Action 的入口是仓库根 `action.yml`,运行时为打包产物 `packages/act
 name: aiwf
 on:
   issues:
-    types: [opened, edited]
+    types: [opened]
   issue_comment:
     types: [created]
 
@@ -37,15 +42,15 @@ jobs:
       github.event_name != 'issue_comment' ||
       (contains(github.event.comment.body, '@aiwf') && github.event.comment.user.type != 'Bot')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # 全量历史,worktree / 分支操作需要
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.28.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
       - run: npm install -g opencode-ai      # opencode 引擎后端
@@ -53,13 +58,18 @@ jobs:
       - uses: ./
         with:
           task_ref: ${{ github.repository }}#${{ github.event.issue.number }}
+          trigger_policy: trusted             # 仅 OWNER/MEMBER/COLLABORATOR 或白名单者可触发
+          allowed_actors: 'alice,bob'        # 额外触发白名单(逗号分隔,忽略大小写)
+          daily_run_limit: '20'              # 本仓库单日最多 20 次;0 = 不限制
+          max_tasks: '6'                     # 单次运行最多 6 个成员任务(1~10)
         env:
           AIWF_MODEL: ${{ vars.AIWF_MODEL }}
           GITHUB_TOKEN: ${{ github.token }}
 ```
 
 > 引用方式:`uses: ./` 适合同仓库 dogfood(入口在本仓库根 `action.yml`);
-> 发布 Marketplace 后可改为 `uses: <owner>/ai-dev-workflow-action@main`。
+> 发布 Marketplace 后可改为 `uses: AllenTango/aiwf@v1`(本仓库真实 remote 为
+> `github.com/AllenTango/aiwf.git`)。
 
 ## 2. Inputs
 
@@ -67,11 +77,21 @@ jobs:
 | --- | --- | --- | --- |
 | `task_ref` | ✔ | — | 任务引用,固定形如 `owner/repo#123`(Issue 编号)。dogfood 常用 `${{ github.repository }}#${{ github.event.issue.number }}`。 |
 | `engine` | — | `opencode` | 引擎后端:`opencode`(调用 opencode CLI)/ `mock`(确定性演练,不触发真模型)。 |
-| `model` | — | env `AIWF_MODEL` | 模型 id,如 `opencode/glm-5.3-free`。留空依次回退:`model` 输入 → 环境变量 `AIWF_MODEL` → 引擎默认模型。 |
+| `model` | — | env `AIWF_MODEL` | 模型 id,可填任意 opencode 支持的 `provider/model`,如 `minimax/MiniMax-M3.1-Flash`、`zai/glm-5.3`、`zhipuai/glm-5.3`、`deepseek/deepseek-chat`、`opencode/glm-5.3-free`。留空依次回退:`model` 输入 → 环境变量 `AIWF_MODEL` → 引擎默认模型。 |
 | `base_branch` | — | 当前 checkout 分支 | PR 的 base 分支。留空时 action 会在运行时读取 checkout 的当前分支(通常即默认分支)。 |
 | `branch_prefix` | — | `aiwf/` | 队员工作分支前缀。 |
-| `max_parallel` | — | `4` | 并行队员上限,正整数。 |
+| `max_parallel` | — | `4` | 并行队员上限,正整数,硬上限 8。 |
 | `dry_run` | — | `false` | `true` 时只跑 `ingest → plan`,输出规划结果,不执行队员、不建 PR(注意:`pr-url` 不会设置)。 |
+| `trigger_policy` | — | `trusted` | 触发者准入策略。`trusted` = 仅允许仓库 OWNER/MEMBER/COLLABORATOR 或 `allowed_actors` 白名单命中者触发;`anyone` = 不限制(不推荐,任何人都能消耗模型额度)。 |
+| `allowed_actors` | — | `''`(空) | 逗号分隔的 GitHub 用户名白名单,命中即放行(忽略大小写)。 |
+| `daily_run_limit` | — | `0` | 本仓库单日最大运行次数。0 表示不限制;超出则本次运行被拒绝并告警。 |
+| `max_tasks` | — | `6` | 单次运行允许的最大成员任务数(= **编制人数上限**,有效范围 1~10)。队长在这个上限内自行决定用几个队员;超限时按**价值**裁剪(砍掉价值最低的任务,依赖闭合)。 |
+| `timeout_ms` | — | `1200000` | 引擎单步超时毫秒(有效范围 60000~3600000)。 |
+| `models` | — | `''` | **模型池**:`role=provider/model` 列表,逗号或换行分隔。例:`worker=opencode/glm-5.3, reviewer=minimax/MiniMax-M3.1-Flash`。队长为**不同队员指派不同模型**(在任务里写角色名);`default` 是未指派时的默认模型。 |
+| `guidelines` | — | `''` | **行为准则**:每行一条。叠加在「内置默认准则」与「队长按任务追加的准则」之后。例:`提交前必须跑 pnpm test`。 |
+| `budget` | — | `0` | **相对成本预算上限**(权重档位单位:low=1 / medium=3 / high=8)。0 = 不限。超预算时按价值裁剪任务。 |
+| `approve` | — | `false` | **两段式审批**:`true` 时队长只出决策包并回帖到 Issue,**不派发任何队员**;人回复 `@aiwf go` 后才按该决策包执行(并省掉一次队长调用)。 |
+| `idempotent` | — | `true` | **幂等短路**:任务内容(标题/正文/评论)与上次运行完全一致时,跳过本次运行(不调模型、不派队员)。运行记录以 HTML 注释写在 Issue 评论里(用户不可见)。确需重跑请改内容或设为 `false`。 |
 
 ## 3. Outputs
 
@@ -96,21 +116,71 @@ PR 描述由 action 生成,固定段落:`🧾 诉求`(Issue 标题/正文摘要/
 | variable | `AIWF_MODEL` | 可选 | 仓库 Settings → Secrets and variables → Actions → **Variables**,键 `AIWF_MODEL`,值如 `opencode/glm-5.3-free`。action 通过 env 透传给 engine。 |
 | secrets / env | `OPENCODE_API_KEY` | opencode 网关必需 | 使用 opencode 系模型(如 `opencode/glm-5.3-free`)时,CI 中需设置此 Secret(opencode 官方网关凭证,`OPENCODE_ZEN_API_KEY` 为其别名)。仓库 Settings → Secrets and variables → Actions → **Secrets** 新建,workflow 以 `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` 注入。 |
 | secrets / env | 模型供应商凭证 | 视供应商 | 不用 opencode 网关、直连其他供应商时,在步骤 env 注入该供应商要求的变量(已核实的四家,均可直接使用):`MINIMAX_API_KEY`(模型如 `minimax/MiniMax-M3.1-Flash`)、`ZAI_API_KEY`(`zai/glm-5.3`)、`ZHIPU_API_KEY`(`zhipuai/glm-5.3`)、`DEEPSEEK_API_KEY`(`deepseek/deepseek-chat`)。也可用 `opencode auth login --method key` 预置;变量名以供应商 / opencode 当前文档为准。 |
+| 说明 | 凭证注入范围 | — | 凭证注入只在**本仓库** Secrets 里,Action 本身不携带密钥(不打包、不落盘任何 key);其他仓库接入需自备凭证。 |
 
 默认 `github.token` 已经配好 issues/pull-requests/contents(依赖 workflow 里的
 `permissions` 块),一般无需额外 Secret;真正需要预置的是**模型供应商凭证**。
 
+> 额外的 `actions: read` 权限只在 `daily_run_limit > 0` 时需要(用于统计当日运行次数);
+> 未授权时配额检查会 fail-open(放行并告警),不会阻断运行。详见
+> [docs/security.md](security.md) §3.2。
+>
+> `GITHUB_TOKEN` 等平台凭证**不会**被传进模型进程(见 security.md §2.2),
+> 成员 agent 拿不到它们;但模型供应商凭证会传(否则无法调用模型)。
+
 ## 5. 触发方式
 
-- **Issue 新建 / 编辑**(`issues: opened, edited`):立即开工。
+### 5.1 队长的自主裁决(开不开工由队长定)
+
+队长拿到 Issue 后**先分析、再决定开不开工**,输出三种裁决之一:
+
+| 裁决 | 行为 | 结果 |
+| --- | --- | --- |
+| `proceed` | 开工 | 派发队员,产出 PR |
+| `reject` | 不值得做 | **零队员调用**;在 Issue 上留一条评论说明为什么不值得做、以及什么条件下才值得做 |
+| `need_clarification` | 信息不足 | **零队员调用**;在 Issue 上留下需要你回答的具体问题,回答后重新触发即可继续 |
+
+> 这不是「省钱的开关」,而是**队长对人类时间的保护**:一个只会闷头执行的队长,会把不该做的
+> 需求做成 5 个任务全做掉;能说「不」的队长,让人把时间花在真正该做的事上。
+
+**队长做判断时能看到什么**(这是判断质量的前提):
+
+| 信息 | 用途 |
+| --- | --- |
+| 文件树 + 固定关键文件(README / package.json / tsconfig / workflow …) | 了解工程形态 |
+| **需求相关文件**(按需求关键词在路径里检索命中,自动纳入快照) | 看懂「这块代码现在长什么样」 |
+| **近期提交**(`git log --oneline -N`) | 判断「是否已有同类工作」「这块是否正在被改」 |
+| 编制上限 / 成本预算 / 模型池 | 判断「值不值得做、要几个人、用什么模型」 |
+
+### 5.2 队员的角色是有约束的
+
+`task.role` 不是装饰:以 `reviewer`/`review`/`audit`/`critic` 开头的角色,
+会使用 opencode 内置的**只读 agent** 且**不放行写权限** —— 评审员只能出结论,
+不能改代码(既杜绝「评审员顺手改了代码」,也更省)。其它角色默认可写文件。
+
+### 5.3 触发事件
+
+- **Issue 新建**(`issues: opened`):立即开工。
 - **Issue 评论**(`issue_comment: created`):评论正文中包含 `@aiwf` 才会触发,
   如 `@aiwf revise: 登录接口补充错误处理示例,并补一段 README`。追加评论会作为
   TaskInput.comments 一起喂给队长,完成增量修改。
+  **这是推荐的迭代入口** —— 需求有变化时用它,而不是去编辑 Issue 正文。
+- **审批模式下的 `@aiwf go`**:`approve: true` 时,队长第一轮只把**决策包**
+  (计划 / 编制 / 成本 / 分模型指派)贴在 Issue 上;你回复 `@aiwf go` 后,
+  第二轮按该决策包执行队员(**省掉一次队长调用**)。决策包之后的普通评论不算批准。
 - 防护:机器人身份(生产 bot)的评论不会触发,避免自触发循环;同一 Issue 的运行
   以 `concurrency` 串行,避免并发写入互相踩踏。
 
-> 注意:任何成员编辑 Issue 都会触发一次运行(不做作者白名单);如需收窄,可在
-> job `if` 里追加 `github.event.issue.user.login == '<账户>'` 之类条件。
+> **额度提示**:本仓库自用的 workflow 只监听 `opened` 而**不**监听 `edited`。
+> 因为「编辑 Issue 也会跑一次完整团队」(1 次队长 + N 次队员模型调用),
+> 而改个错别字几乎不需要重跑 —— 这是最典型的额度浪费点。
+> 消费方若监听了 `edited`,建议同样改成只用评论触发迭代。
+
+> 注意:**谁能触发**由 `trigger_policy` 控制(默认 `trusted`:仅仓库
+> OWNER/MEMBER/COLLABORATOR 或 `allowed_actors` 白名单命中者可触发),外部用户开 Issue
+> 不会被受理,因此不会消耗模型额度。若确实需要放开,显式设 `trigger_policy: anyone`
+> 并自行承担额度风险;也可在 job `if` 里追加
+> `github.event.issue.user.login == '<账户>'` 之类条件。
 
 ## 6. 示例 Issue 文案
 
@@ -151,6 +221,12 @@ Inputs 在 `uses: ./` 步骤的 `with:` 中覆盖,例如:
           branch_prefix: team-a/           # 分支前缀
           max_parallel: 2                  # 自跑 2 个并行队员
           dry_run: true                    # 只看规划,不写代码不建 PR
+          # ---- 安全与额度护栏(详见 docs/security.md)----
+          trigger_policy: trusted          # 仅 OWNER/MEMBER/COLLABORATOR 或白名单者可触发
+          allowed_actors: 'alice,bob'      # 白名单(逗号分隔,忽略大小写)
+          daily_run_limit: '20'            # 本仓库单日最多 20 次;0 = 不限制
+          max_tasks: '4'                   # 单次运行最多 4 个成员任务(1~10)
+          timeout_ms: '900000'             # 引擎单步超时(60000~3600000)
 ```
 
 不同场景可复制多个 workflow 变体:例如 `aiwf-planning.yml`(只开 `dry_run`)
@@ -170,12 +246,25 @@ Inputs 在 `uses: ./` 步骤的 `with:` 中覆盖,例如:
 | 队员产出空 / `零成员成果` | engine 运行异常(缺 CLI、缺凭证、模型 4xx) | 确认 `npm install -g opencode-ai` 及供应商凭证已注入;先用 `engine: mock` 或 `dry_run: true` 验证链路。 |
 | 评论含 `@aiwf` 却没触发 | 评论者是 Bot,或事件未在 types 中 | 用人工身份评论;确认 workflow 监听 `issue_comment: created`。 |
 | `dry_run: true` 后 `pr-url` 为空 | 属预期(规划模式下没有 PR) | 看 `summary` 输出与规划日志。 |
+| `🚫 触发准入未通过` | 触发者不在信任名单(`trigger_policy: trusted` 默认拦截外部用户) | 属预期保护;如需放行该账号,把它加进 `allowed_actors`(逗号分隔)。 |
+| `🚫 超出每日运行配额` | 当日运行次数已达 `daily_run_limit` | 属预期保护;调大上限或次日再跑。 |
+| `配额统计失败,本次未受配额限制` | workflow `permissions` 缺 `actions: read` | 配额未生效(失败开放);在 permissions 块加 `actions: read` 即可恢复统计。 |
+| `输入参数无效: … max_parallel …` | 超过硬上限 8 / `max_tasks` 超过 10 / `timeout_ms` 越界 | 按第 2 节的取值范围收敛。 |
+| `已排除 N 个疑似凭证文件` | 成员产出了 `.env` / `*.pem` 等凭证文件 | 属预期拦截;该文件不会进入提交与 PR。如确需提交,请改名并在 PR 里说明。 |
+| `已对 N 个文件中的疑似凭证做脱敏` | 产出文件内容里含疑似密钥 | 属预期拦截;文件内容已被替换为 `***REDACTED***`,成员状态降级为 partial。 |
+| `任务已跳过:超出本次运行的时间预算` | 单次运行耗时超过墙钟预算 | 调大 `timeout_ms` 或调小 `max_tasks` / `max_parallel`。 |
+| `⏭ 幂等短路` | 任务内容与上次运行完全一致 | 属预期保护;确需重跑请修改任务内容,或把 `idempotent` 设为 `false`。 |
+| `🤖 AI 队长裁决:本次不予开工` | 队长判定该需求不值得做 | 属预期;看 Issue 评论里的判断依据,不同意可在评论里说明理由后重新触发。 |
+| `🤖 AI 队长:需要你澄清几点才能开工` | 队长判定信息不足 | 属预期;回答问题后重新触发即可继续。 |
 
 ## 9. 打包与发布(Marketplace)
 
 - 入口 `runs.main` 指向 `packages/action/dist/index.js`。Marketplace 从仓库根
-  `action.yml` 读取元数据,**该 dist 必须随仓库提交**;当前根 `.gitignore` 全局忽略
-  `dist/`,需要增加反排除(`!packages/action/dist/` 与 `!packages/action/dist/**`),
-  此为集成时的遗留事项。
+  `action.yml` 读取元数据,**该 dist 必须随仓库提交** —— **已完成**:根 `.gitignore`
+  已含反排除规则 `!packages/action/dist/` 与 `!packages/action/dist/**`,
+  且 `packages/action/dist/index.js` 已被 git 跟踪,发布前只需确认 `git status` 干净。
+- 运行时要求:`runs.using` 为 **node24**(GitHub 已于 2026-06-16 起默认 Node24,
+  2026-09-16 起移除 Node20),消费方自建 Action 也应使用 node24;
+  配套的 esbuild bundle target 与 CI 的 `node-version` 均已升到 24。
 - 发布审核要求 action 声明的 inputs/outputs 与运行时行为一致 —— 已在本文档第 2/3 节对齐。
 - 版本:发 `v1.x` tag,并在 Marketplace 勾选主版本号消费(`@v1`)。

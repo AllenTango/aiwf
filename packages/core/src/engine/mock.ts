@@ -130,6 +130,13 @@ export class MockEngine implements Engine {
         instructions: lines.join('\n'),
         dependsOn: id === 't1' ? [] : ['t1'],
         expectedOutputs: keywords.includes('CONFLICT') ? [`mock/${id}.md`, 'shared/decision.txt'] : [`mock/${id}.md`],
+        weight: 'medium',
+        // 若配置了模型池,mock 也按池指派模型(便于演练「不同队员不同模型」)。
+        ...(req.budget?.modelPool?.['worker'] !== undefined
+          ? { model: 'worker' }
+          : req.budget?.modelPool?.['default'] !== undefined
+            ? { model: 'default' }
+            : {}),
       };
     };
 
@@ -150,9 +157,27 @@ export class MockEngine implements Engine {
     }
 
     const plan: WorkflowPlan = {
+      verdict: 'proceed',
+      rationale: 'mock 引擎:固定演练计划,不做真实价值判断',
       summary: `mock 计划:${tasks.length} 个任务(${tasks.map((x) => x.id).join(' → / ')})`,
       tasks,
       risks,
+      analysis: {
+        understanding: 'mock 引擎的确定性占位分析,不反映真实仓库情况',
+        affectedAreas: tasks.map((t) => `mock/${t.id}.md`),
+        risks,
+      },
+      cost: {
+        weight: tasks.length >= 3 ? 'medium' : 'low',
+        expectedCalls: tasks.length + 1,
+        units: tasks.reduce((sum, t) => sum + (t.weight === 'low' ? 1 : t.weight === 'high' ? 8 : 3), 0),
+        reason: 'mock 引擎按任务数线性估算',
+        breakdown: tasks.map((t) => ({
+          taskId: t.id,
+          weight: t.weight ?? 'medium',
+          units: t.weight === 'low' ? 1 : t.weight === 'high' ? 8 : 3,
+        })),
+      },
     };
     return Promise.resolve(plan);
   }

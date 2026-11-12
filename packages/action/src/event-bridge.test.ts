@@ -7,6 +7,7 @@ import type { Deliverable, LogLevel, PipelineEvent, TaskResult, WorkflowPlan } f
 import {
   bridgePipelineEvent,
   LOG_LEVEL_TO_CORE_METHOD,
+  redactPipelineEvent,
   setDeliverableOutputs,
   TASK_STATUS_TO_LEVEL,
 } from './event-bridge.js';
@@ -199,5 +200,129 @@ describe('setDeliverableOutputs(直接调用)', () => {
     expect(setOutputMock).not.toHaveBeenCalledWith('pr-url', expect.anything());
     expect(setOutputMock).toHaveBeenCalledWith('branch', 'b');
     expect(setOutputMock).toHaveBeenCalledWith('summary', 's');
+  });
+});
+
+describe('redactPipelineEvent(四类事件脱敏,事件类型不变)', () => {
+  const SECRET = 'sk-abcdefghijklmnopqrstuvwx';
+  const PLACEHOLDER = '***REDACTED***';
+  const redact = (text: string): string => text.split(SECRET).join(PLACEHOLDER);
+
+  it('log 事件:message 被替换,类型不变', () => {
+    const event: PipelineEvent = {
+      type: 'log',
+      level: 'info',
+      message: `key=${SECRET}`,
+      at: 1,
+    };
+    const out = redactPipelineEvent(event, redact);
+    expect(out.type).toBe('log');
+    expect(out.type === 'log' ? out.message : '').toBe(`key=${PLACEHOLDER}`);
+    expect(out.type === 'log' ? out.message : '').not.toContain(SECRET);
+  });
+
+  it('plan 事件:summary/tasks[].title/instructions/risks 全部脱敏,类型不变', () => {
+    const plan: WorkflowPlan = {
+      summary: `概览 ${SECRET}`,
+      tasks: [
+        {
+          id: 't1',
+          title: `实现 ${SECRET}`,
+          role: 'implementer',
+          instructions: `请使用 ${SECRET}`,
+          dependsOn: [],
+          expectedOutputs: ['src/**'],
+        },
+      ],
+      risks: [`风险 ${SECRET}`],
+    };
+    const out = redactPipelineEvent({ type: 'plan', plan, at: 2 }, redact);
+    expect(out.type).toBe('plan');
+    if (out.type !== 'plan') return;
+    expect(out.plan.summary).toBe(`概览 ${PLACEHOLDER}`);
+    expect(out.plan.tasks[0]?.title).toBe(`实现 ${PLACEHOLDER}`);
+    expect(out.plan.tasks[0]?.instructions).toBe(`请使用 ${PLACEHOLDER}`);
+    expect(out.plan.risks[0]).toBe(`风险 ${PLACEHOLDER}`);
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+
+  it('task-result 事件:summary/notes/error 全部脱敏,类型不变', () => {
+    const result: TaskResult = {
+      taskId: 't1',
+      status: 'failed',
+      summary: `完成 ${SECRET}`,
+      changedFiles: [],
+      notes: [`备注 ${SECRET}`],
+      error: `boom ${SECRET}`,
+    };
+    const out = redactPipelineEvent({ type: 'task-result', result, at: 3 }, redact);
+    expect(out.type).toBe('task-result');
+    if (out.type !== 'task-result') return;
+    expect(out.result.summary).toBe(`完成 ${PLACEHOLDER}`);
+    expect(out.result.notes[0]).toBe(`备注 ${PLACEHOLDER}`);
+    expect(out.result.error).toBe(`boom ${PLACEHOLDER}`);
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+
+  it('deliver 事件:summary/plan/taskResults 全部脱敏,类型不变', () => {
+    const deliverable: Deliverable = {
+      branch: 'aiwf/issue-7',
+      summary: `结项 ${SECRET}`,
+      plan: {
+        summary: `概览 ${SECRET}`,
+        tasks: [
+          {
+            id: 't1',
+            title: `实现 ${SECRET}`,
+            role: 'implementer',
+            instructions: `请使用 ${SECRET}`,
+            dependsOn: [],
+            expectedOutputs: ['src/**'],
+          },
+        ],
+        risks: [`风险 ${SECRET}`],
+      },
+      taskResults: [
+        {
+          taskId: 't1',
+          status: 'completed',
+          summary: `完成 ${SECRET}`,
+          changedFiles: [],
+          notes: [`备注 ${SECRET}`],
+        },
+      ],
+      pullRequest: { number: 12, url: 'https://github.com/acme/team/pull/12' },
+    };
+    const out = redactPipelineEvent({ type: 'deliver', deliverable, at: 4 }, redact);
+    expect(out.type).toBe('deliver');
+    if (out.type !== 'deliver') return;
+    expect(out.deliverable.summary).toBe(`结项 ${PLACEHOLDER}`);
+    expect(out.deliverable.plan.summary).toBe(`概览 ${PLACEHOLDER}`);
+    expect(out.deliverable.plan.tasks[0]?.title).toBe(`实现 ${PLACEHOLDER}`);
+    expect(out.deliverable.taskResults[0]?.summary).toBe(`完成 ${PLACEHOLDER}`);
+    expect(out.deliverable.taskResults[0]?.notes[0]).toBe(`备注 ${PLACEHOLDER}`);
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+    // 非文本字段保持原样
+    expect(out.deliverable.branch).toBe('aiwf/issue-7');
+    expect(out.deliverable.pullRequest?.url).toBe('https://github.com/acme/team/pull/12');
+  });
+
+  it('stage / task-dispatch 事件原样返回(类型不变)', () => {
+    const stage = redactPipelineEvent({ type: 'stage', stage: 'plan', at: 5 }, redact);
+    expect(stage.type).toBe('stage');
+    const dispatch = redactPipelineEvent(
+      { type: 'task-dispatch', taskId: 't1', branch: 'aiwf/x', at: 6 },
+      redact,
+    );
+    expect(dispatch.type).toBe('task-dispatch');
+  });
+
+  it('脱敏不改变事件的其他字段(at/level/id 等)', () => {
+    const out = redactPipelineEvent(
+      { type: 'log', level: 'warn', message: SECRET, at: 99 },
+      redact,
+    );
+    expect(out.type === 'log' ? out.level : '').toBe('warn');
+    expect(out.at).toBe(99);
   });
 });
