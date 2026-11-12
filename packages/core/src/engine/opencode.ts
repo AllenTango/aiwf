@@ -80,6 +80,7 @@ export function buildPlanPrompt(req: PlanRequest): string {
 
   parts.push('# 输出格式(严格遵守)');
   parts.push('仅输出一段 JSON(可用 ```json 代码围栏),JSON 之外不得有任何说明文字。');
+  parts.push('JSON 字符串值内部禁止出现连续反引号围栏(```)或第二个代码块;如需引用示例代码,改用单反引号或缩进文本。');
   parts.push('结构:');
   parts.push('{');
   parts.push('  "summary": "整体计划的一句中文摘要",');
@@ -143,14 +144,67 @@ export function buildTaskPrompt(ctx: MemberContext): string {
 // 纯逻辑:解析
 // ---------------------------------------------------------------------------
 
-/** 从模型输出中取出疑似 JSON 的文本:优先代码围栏,否则取首个 '{' 到最后一个 '}'。 */
-function extractJsonCandidate(text: string): string {
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fence?.[1] ?? text;
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) return candidate;
-  return candidate.slice(start, end + 1);
+/**
+ * 字符串感知的括号配平扫描:从 from 起找首个 '{',忽略字符串内部的任何字符
+ * (含 ``` 围栏),数括号深度,返回首个顶层闭合对象的文本;未闭合返回 null。
+ *
+ * 背景(CI 实证):计划 JSON 的任务 instructions 字符串值里常嵌 markdown 代码围栏,
+ * 朴素的 ``` 非贪婪闭栏匹配会在字符串内部错误截断(Unterminated string)。
+ */
+function scanBalancedObject(text: string, from: number): string | null {
+  const start = text.indexOf('{', from);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/** 收集疑似 JSON 的候选文本,按可信度排序:纯 JSON → 各围栏区域 → 全文裸扫描。 */
+function extractJsonCandidates(text: string): string[] {
+  const out: string[] = [];
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) out.push(trimmed);
+
+  // 围栏区域:每个 ```(json) 开栏之后做配平扫描;刻意不依赖闭栏位置,
+  // 因为闭栏可能出现在 JSON 字符串值内部(内嵌代码示例)。
+  const fenceOpen = /```(?:json)?/gi;
+  fenceOpen.lastIndex = 0;
+  let fenced = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fenceOpen.exec(text)) !== null && fenced < 3) {
+    const cand = scanBalancedObject(text, m.index + m[0].length);
+    if (cand) {
+      out.push(cand);
+      fenced++;
+    }
+  }
+
+  // 全文裸扫描(模型未用围栏时):最多从前 8 个 '{' 各扫一次,配平成功才算候选。
+  let from = 0;
+  for (let i = 0; i < 8; i++) {
+    const cand = scanBalancedObject(text, from);
+    if (!cand) break;
+    out.push(cand);
+    from = text.indexOf('{', from + 1);
+    if (from < 0) break;
+  }
+  return [...new Set(out)];
 }
 
 function failParse(text: string, reason: string): never {
@@ -166,12 +220,26 @@ function failParse(text: string, reason: string): never {
 /** 解析队长输出的 WorkflowPlan;必填缺失/非法 → 描述性中文错误。 */
 export function parsePlanJson(text: string): WorkflowPlan {
   if (!text || !text.trim()) failParse(text ?? '', '输出为空');
-  const candidate = extractJsonCandidate(text);
+  const candidates = extractJsonCandidates(text);
   let data: unknown;
-  try {
-    data = JSON.parse(candidate);
-  } catch (e) {
-    failParse(text, `候选 JSON 不是合法 JSON(${e instanceof Error ? e.message : String(e)})`);
+  let parsed = false;
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      data = JSON.parse(candidate);
+      parsed = true;
+      break;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (!parsed) {
+    failParse(
+      text,
+      candidates.length === 0
+        ? '输出中未找到完整 JSON 对象'
+        : `候选 JSON 不是合法 JSON(${lastError instanceof Error ? lastError.message : String(lastError)})`,
+    );
   }
   const obj = asRecord(data);
   if (!obj) failParse(text, 'JSON 顶层不是对象');

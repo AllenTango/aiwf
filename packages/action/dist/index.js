@@ -25219,6 +25219,7 @@ function buildPlanPrompt(req) {
   parts.push("- risks \u5217\u51FA\u6267\u884C\u98CE\u9669\u4E0E\u9700\u8981\u4EBA\u5DE5\u6CE8\u610F\u7684\u4E8B\u9879\u3002");
   parts.push("# \u8F93\u51FA\u683C\u5F0F(\u4E25\u683C\u9075\u5B88)");
   parts.push("\u4EC5\u8F93\u51FA\u4E00\u6BB5 JSON(\u53EF\u7528 ```json \u4EE3\u7801\u56F4\u680F),JSON \u4E4B\u5916\u4E0D\u5F97\u6709\u4EFB\u4F55\u8BF4\u660E\u6587\u5B57\u3002");
+  parts.push("JSON \u5B57\u7B26\u4E32\u503C\u5185\u90E8\u7981\u6B62\u51FA\u73B0\u8FDE\u7EED\u53CD\u5F15\u53F7\u56F4\u680F(```)\u6216\u7B2C\u4E8C\u4E2A\u4EE3\u7801\u5757;\u5982\u9700\u5F15\u7528\u793A\u4F8B\u4EE3\u7801,\u6539\u7528\u5355\u53CD\u5F15\u53F7\u6216\u7F29\u8FDB\u6587\u672C\u3002");
   parts.push("\u7ED3\u6784:");
   parts.push("{");
   parts.push('  "summary": "\u6574\u4F53\u8BA1\u5212\u7684\u4E00\u53E5\u4E2D\u6587\u6458\u8981",');
@@ -25267,13 +25268,53 @@ function buildTaskPrompt(ctx) {
   parts.push("- \u8BE5\u6807\u8BB0\u884C\u4E4B\u540E\u4E0D\u8981\u518D\u8F93\u51FA\u4EFB\u4F55\u5185\u5BB9\u3002");
   return parts.join("\n");
 }
-function extractJsonCandidate(text) {
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fence?.[1] ?? text;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start < 0 || end <= start) return candidate;
-  return candidate.slice(start, end + 1);
+function scanBalancedObject(text, from) {
+  const start = text.indexOf("{", from);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+function extractJsonCandidates(text) {
+  const out = [];
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) out.push(trimmed);
+  const fenceOpen = /```(?:json)?/gi;
+  fenceOpen.lastIndex = 0;
+  let fenced = 0;
+  let m;
+  while ((m = fenceOpen.exec(text)) !== null && fenced < 3) {
+    const cand = scanBalancedObject(text, m.index + m[0].length);
+    if (cand) {
+      out.push(cand);
+      fenced++;
+    }
+  }
+  let from = 0;
+  for (let i = 0; i < 8; i++) {
+    const cand = scanBalancedObject(text, from);
+    if (!cand) break;
+    out.push(cand);
+    from = text.indexOf("{", from + 1);
+    if (from < 0) break;
+  }
+  return [...new Set(out)];
 }
 function failParse(text, reason) {
   const t = (text ?? "").trim();
@@ -25285,12 +25326,24 @@ function failParse(text, reason) {
 }
 function parsePlanJson(text) {
   if (!text || !text.trim()) failParse(text ?? "", "\u8F93\u51FA\u4E3A\u7A7A");
-  const candidate = extractJsonCandidate(text);
+  const candidates = extractJsonCandidates(text);
   let data;
-  try {
-    data = JSON.parse(candidate);
-  } catch (e) {
-    failParse(text, `\u5019\u9009 JSON \u4E0D\u662F\u5408\u6CD5 JSON(${e instanceof Error ? e.message : String(e)})`);
+  let parsed = false;
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      data = JSON.parse(candidate);
+      parsed = true;
+      break;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (!parsed) {
+    failParse(
+      text,
+      candidates.length === 0 ? "\u8F93\u51FA\u4E2D\u672A\u627E\u5230\u5B8C\u6574 JSON \u5BF9\u8C61" : `\u5019\u9009 JSON \u4E0D\u662F\u5408\u6CD5 JSON(${lastError instanceof Error ? lastError.message : String(lastError)})`
+    );
   }
   const obj = asRecord(data);
   if (!obj) failParse(text, "JSON \u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");

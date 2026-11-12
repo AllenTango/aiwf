@@ -93,6 +93,37 @@ describe('parsePlanJson', () => {
     expect(plan.tasks.length).toBe(2);
   });
 
+  it('JSON 字符串值内嵌 ``` 围栏时仍可解析(CI 实证回归:非贪婪闭栏会半截截断)', () => {
+    // 还原线上失败形态:prose 前缀 + ```json 围栏,instructions 字符串值里含 ```bash 围栏。
+    const planText = JSON.stringify({
+      summary: '演示脚本计划',
+      tasks: [
+        {
+          id: 't1',
+          title: '写 PowerShell 演示脚本',
+          instructions: '脚本应输出如下围栏:\n```powershell\npnpm run demo\n```\n并保证幂等。',
+          dependsOn: [],
+          expectedOutputs: ['scripts/demo.ps1'],
+        },
+      ],
+      risks: [],
+    });
+    const noisy = `I'll explore the repo first.\n\`\`\`json\n${planText}\n\`\`\``;
+    const plan = parsePlanJson(noisy);
+    expect(plan.summary).toBe('演示脚本计划');
+    expect(plan.tasks[0]!.instructions).toContain('pnpm run demo');
+  });
+
+  it('围栏前的闲话代码块不干扰真实计划提取', () => {
+    const planText = JSON.stringify({
+      summary: '计划',
+      tasks: [{ id: 't1', title: '实现', instructions: '做', dependsOn: [], expectedOutputs: [] }],
+      risks: [],
+    });
+    const noisy = '```bash\npnpm build\n```\n下面是计划:\n```json\n' + planText + '\n```';
+    expect(parsePlanJson(noisy).summary).toBe('计划');
+  });
+
   it('夹杂物(前后闲话 + 内嵌 JSON)可解析', () => {
     const noisy = `好的,以下是我的方案。\n\n\`\`\`json\n${validPlanText}\n\`\`\`\n\n祝顺利!`;
     const plan = parsePlanJson(noisy);
